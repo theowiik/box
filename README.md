@@ -4,44 +4,69 @@
     <img src="assets/logo.png" alt="Logo" width="250px"/>
 </p>
 
-An LED matrix on a Raspberry Pi that shows whatever you send it. Everything
-that can run on the Pi does — weather, RSS feeds, animations, the scheduler —
-so the box works on its own. Anything that needs another machine (a GIF on
-your laptop, a Discord login) POSTs events to it.
+An [ESP-Mosaico](https://mosaico.ai/en) on your desk that shows whatever you
+send it, drawn as an LED panel on its screen. The box itself only does
+the core: it receives events over Wi-Fi, decides what gets the panel, and draws
+it. Everything with an opinion about *content* — weather, feeds, GIFs — is a
+connector on some other machine that POSTs to it.
 
+```mermaid
+flowchart LR
+    web(["🌐 The internet<br/>news and review feeds"])
+
+    subgraph server["🖥️ A server that stays on"]
+        sources["☀️ Weather<br/>📰 Feeds<br/>🍺 Animations"]
+    end
+
+    subgraph laptop["💻 Your laptop"]
+        tools["💬 Messages<br/>🎞️ GIFs<br/>🌈 Demos"]
+    end
+
+    subgraph box["📟 The box (ESP-Mosaico)"]
+        direction TB
+        inbox["📥 <b>Inbox</b><br/>takes events over Wi-Fi"]
+        queue["🚦 <b>Queue</b><br/>urgent first,<br/>one at a time"]
+        idle["🔁 <b>Idle loop</b><br/>weather and the like<br/>when nothing's queued"]
+        screen["✨ <b>Screen</b><br/>LED-style dots,<br/>text sized to fit"]
+        inbox --> queue --> screen
+        inbox --> idle --> screen
+    end
+
+    web --> sources
+    sources -->|Wi-Fi| box
+    tools -->|Wi-Fi| box
+
+    classDef thing fill:#ffffff,stroke:#d0d7de,color:#1f2328,rx:8,ry:8
+    classDef step fill:#ffffff,stroke:#2da44e,stroke-width:2px,color:#1f2328
+    class web,sources,tools thing
+    class inbox,queue,idle,screen step
+    style server fill:#ddf4ff,stroke:#54aeff,color:#0a3069
+    style laptop fill:#fff8c5,stroke:#d4a72c,color:#4d2d00
+    style box fill:#dafbe1,stroke:#2da44e,color:#044f1e
+    linkStyle 0,1,2,3 stroke:#2da44e,stroke-width:2px
 ```
-            ┌──────────────────── the Pi ─────────────────────┐
-gifcast ──┐ │                                                 │
-curl    ──┼─┼─► POST /api/events ──► scheduler ──► render ──► LED matrix
-discord ──┘ │                          ▲                      │   or
-            │   weather, feeds ────────┘        /emulator ◄───┘ (no hardware)
-            └─────────────────────────────────────────────────┘
-```
+
+Any machine on the network can be a connector. If the one running the sources
+goes down, start them anywhere else: the box doesn't care who talks to it.
 
 ## Start
 
-Needs [uv](https://docs.astral.sh/uv/), nothing else. There is nothing to
-configure.
+The board needs the box firmware once (`make install`, see
+[Firmware](#firmware)) and Wi-Fi, which it takes from the Mosaico's own Vibe
+Mode settings. At boot it shows its address on the panel and answers at
+**http://box.local**.
 
 ```bash
-make dev                # the box, on http://localhost:8000
-make demo VISUAL=beer   # play a built-in visual, from another terminal
+make send TEXT="hello"   # some text, now
+make demo VISUAL=beer    # a built-in visual: rainbow, life, gradient, beer
+make gif GIF=party.gif   # a GIF
+make sources             # weather and feeds, until stopped
+make status              # what the panel shows
 ```
 
-No hardware needed: without `BOX_DISPLAY_MODE=matrix` the box emulates the
-panel. **http://localhost:8000/emulator** is exactly what the matrix would
-show — the pixels on black, nothing else. The dashboard at `/` adds controls
-and the event log; `/docs` is the API. Both draw the same frames the matrix
-gets, so they cannot drift from the hardware.
-
-Running the box somewhere else, or on another port? Put it in a `.env` at the
-repo root — the box, the Makefile and gifcast all read it, so it is one line in
-one place:
-
-```ini
-BOX_PORT=9100
-# BOX_URL=http://box.local:8000   # connectors only, when the box is not local
-```
+The connectors need [uv](https://docs.astral.sh/uv/) and nothing else. If
+`box.local` does not resolve on your network, put the box's IP in a `.env`
+(copy [.env.example](.env.example)): `BOX_URL=http://192.168.0.228`.
 
 ## Sending something
 
@@ -49,7 +74,7 @@ BOX_PORT=9100
 curl -H 'Content-Type: application/json' \
      -d '{"source":"discord","priority":"alert",
           "scene":{"kind":"text","text":"@theo mentioned you"}}' \
-     http://localhost:8000/api/events
+     http://box.local/api/events
 ```
 
 No colour in that payload: the box knows Discord is blurple. Connectors send
@@ -64,54 +89,67 @@ No colour in that payload: the box knows Discord is blurple. Connectors send
 
 Two instant tiers so a burst stays readable: pings line up behind each other
 instead of each shoving the last off screen. One pending event per source, so
-ten pings do not buy eighty seconds of panel time.
+ten pings do not buy eighty seconds of panel time. An interrupted event comes
+back with the time it had left.
 
-Scenes are `text` (centred, or scrolled when it does not fit), `visual` (a
-built-in animation by name: `rainbow`, `life`, `gradient`, `beer`), `frames`
-(your own RGB animation), `solid` and `blank`.
+Scenes are `text`, `frames` (your own RGB animation: `width`, `height`, `fps`,
+`loop`, base64 `data`; any size, scaled to the panel), `solid` and `blank`.
+Text never scrolls: it is word-wrapped and drawn as large as it fits, so a
+short word fills the panel and a paragraph gets small; `\n` forces a line
+break, and only text too long for even the smallest size is cut with `...`.
+`duration` is seconds on the panel; leave it out for the priority's default.
+
+Visuals are rendered by the sender, not the box: `box-sources visual beer` (or
+`make demo`) draws the pour at the size the box reports and sends it as frames.
+
+| Endpoint | |
+| --- | --- |
+| `POST /api/events` | Submit an event |
+| `DELETE /api/events` | Drop queued events |
+| `GET /api/display` | What's on the panel, its size, and measured `drawn_fps`/`shown_fps` |
+| `POST /api/display/clear` | Drop the queue and the idle rotation |
+| `POST /api/display/brightness` | `{"brightness": 0.0–1.0}`, until the next reboot |
+
+Errors come back as `{"detail": "..."}`: 422 for an invalid event, 503 when the
+queue, the rotation or animation memory is full.
 
 ## What runs where
 
-**On the Pi, if it can.** Anything that needs nothing but the box and the
-internet runs there, so it keeps working while every other machine sleeps and
-there is no second service to keep alive:
+**On the box: only the core.** Receiving, validating, the scheduler and
+drawing. Its state is memory: after a reboot the queue and the idle rotation
+are empty until connectors post again (the weather refreshes every minute).
 
-- **Feeds** — RSS and Atom, one line each in `box/src/box/sources/feeds.py`. A
-  new item shows its title, or plays a visual: a new
-  [En Stor Stark Review](https://enstorstarkreview.se/) review pours a pint.
-- **Weather** — on the box's own timer (mocked, for now).
-- **Visuals** — generated on the box, once, then cached.
+**Everywhere else: content.** [`connectors/sources`](connectors/sources) is
+weather, RSS/Atom feeds and the visual generators, as one long-running service
+— a systemd user unit for whichever machine you leave on.
+[`connectors/gifcast`](connectors/gifcast) converts a GIF on your disk. Anything
+that can run `curl` is a connector; there is no SDK to keep in sync.
 
-**Elsewhere, only if it must.** A connector exists because it depends on
-something the Pi does not have. [gifcast](connectors/gifcast) needs the GIF on
-your disk; a Discord listener would need your login. Anything that can run
-`curl` is a connector — there is no SDK to keep in sync.
+## Firmware
 
-## On the Pi
+[`firmware/`](firmware) is an ESP-IDF application for the ESP-Mosaico. It
+builds against an [esp-mosaico-vibe](https://github.com/esp-mosaico/esp-mosaico-vibe)
+workspace (board support, ESP-Iris, install tooling), set up per its README.
+Point `MOSAICO_WORKSPACE` at it in `.env`, plug the board in over USB, and:
 
-Set `BOX_DISPLAY_MODE=matrix` and install the `rgbmatrix` Python bindings from
-[hzeller/rpi-rgb-led-matrix](https://github.com/hzeller/rpi-rgb-led-matrix)
-into the box's environment (they are not on PyPI, so not a declared
-dependency); `uv sync --extra pi` adds Pillow, which makes pushing frames to
-the panel much faster. Run `make bench` **on the Pi** before raising `BOX_FPS`.
+```bash
+make install      # build and install (keeps the Mosaico's Vibe Mode intact)
+make logs         # follow the board's log
+make screenshot   # save the panel to box.png
+```
 
-[`box/deploy/box.service`](box/deploy/box.service) runs it at boot under
-systemd. Feed state (which items were already shown) lives in
-`~/.local/state/box`, or `BOX_STATE_DIR`; `BOX_FEEDS=0` turns feeds off.
-
-Everything else is a `BOX_*` environment variable — in the environment or that
-`.env` — with a working default: panel size, fps, gamma, city, host and port,
-`BOX_TOKEN` to require a bearer token on writes, and the matrix wiring options.
-`box/src/box/config.py` is the list.
+Hold the AI button while powering on to get back to Vibe Mode. Build options
+(hostname, a bearer token for writes, panel size, frame rate) are in
+[firmware/README.md](firmware/README.md).
 
 ## Development
 
 ```bash
-make check    # lint + tests, the box and gifcast
+make check    # firmware core tests (on this machine, under ASan) + connectors
 make format
 ```
 
-Two structural rules, both enforced by tests: `box.api` is the interface
-(HTTP, auth, dashboard) and the rest of the box never imports a web framework;
-and only `display/matrix.py` touches the hardware, which is what lets the
-emulator stand in for it exactly.
+The firmware's core — event contract, scheduler, scenes, the LED look — is
+portable C, built and tested on this machine by `make check`, which also
+keeps it free of ESP-IDF. Only `box_device` touches ESP-IDF or hardware. See
+[AGENTS.md](AGENTS.md) for the layout.

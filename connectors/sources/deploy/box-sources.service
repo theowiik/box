@@ -1,0 +1,17 @@
+# systemd user unit: weather and feeds for the box, from whichever machine
+# stays on. Install: see connectors/sources/README.md.
+[Unit]
+Description=box sources: weather and feeds for the box
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+WorkingDirectory=%h/git/box/connectors/sources
+# uv from the usual places; the repo's .env supplies BOX_URL and friends.
+Environment=PATH=%h/.local/bin:%h/.cargo/bin:/etc/profiles/per-user/%u/bin:/run/current-system/sw/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=/usr/bin/env uv run --frozen box-sources run
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=default.target

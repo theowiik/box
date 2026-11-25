@@ -1,0 +1,9 @@
+# Extend the native UART0 console with Iris commands at the same baud rate.
+CONFIG_ESP_CONSOLE_UART_DEFAULT=y
+CONFIG_ESP_CONSOLE_UART_BAUDRATE=115200
+CONFIG_ESP_IRIS_TRANSPORT_UART=y
+CONFIG_ESP_IRIS_UART_NUM=0
+CONFIG_ESP_IRIS_UART_BAUDRATE=115200
+# Reuse the IDF console pins instead of assigning a separate UART pin pair.
+CONFIG_ESP_IRIS_UART_TX_GPIO=-1
+CONFIG_ESP_IRIS_UART_RX_GPIO=-1

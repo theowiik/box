@@ -1,6 +1,6 @@
 """Turn a GIF into panel-sized RGB frames.
 
-All decoding happens here, on whatever machine runs the connector, so the Pi
+All decoding happens here, on whatever machine runs the connector, so the box
 never grows an image stack. The box only ever receives raw pixels.
 """
 

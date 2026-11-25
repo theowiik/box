@@ -1,0 +1,6 @@
+description: The box on ESP-Mosaico hardware - display, Wi-Fi, HTTP API
+dependencies:
+  espressif/cjson: "^1.7.18"
+  # The versions the Mosaico Hello World template resolves.
+  espressif/esp_display_present: "~1.2.2"
+  espressif/mdns: "~1.12.0"

@@ -22,10 +22,9 @@ class BoxError(RuntimeError):
     pass
 
 
-#: Where the box is unless something says otherwise: same machine, same port it
-#: serves on by default — the case that should need no thought.
-DEFAULT_HOST = "localhost"
-DEFAULT_PORT = "8000"
+#: Where the box is unless something says otherwise. It advertises itself over
+#: mDNS, so on most networks this needs no thought.
+DEFAULT_URL = "http://box.local"
 
 
 def _find_dotenv(start: Path) -> Path | None:
@@ -64,13 +63,13 @@ def load_dotenv(start: Path | None = None) -> None:
 
 
 def box_url(explicit: str | None = None) -> str:
-    """`--url`, then `BOX_URL`, then `BOX_PORT` on localhost, then the default."""
+    """`--url`, then `BOX_URL`, then box.local."""
     if explicit:
         return explicit.rstrip("/")
     load_dotenv()
     if os.getenv("BOX_URL"):
         return os.environ["BOX_URL"].rstrip("/")
-    return f"http://{DEFAULT_HOST}:{os.getenv('BOX_PORT') or DEFAULT_PORT}"
+    return DEFAULT_URL
 
 
 @dataclass(frozen=True)
@@ -91,8 +90,8 @@ class BoxClient:
             r.raise_for_status()
         except httpx.HTTPError as exc:
             raise BoxError(
-                f"Could not reach a box at {self.base_url} — is it running? "
-                f"Start one with `make dev`, or set BOX_URL in a .env.\n{exc}"
+                f"Could not reach a box at {self.base_url} — is it on and on Wi-Fi? "
+                f"Set BOX_URL in a .env if box.local does not resolve.\n{exc}"
             ) from exc
         data = r.json()
         return Panel(width=data["width"], height=data["height"])
@@ -107,8 +106,8 @@ class BoxClient:
             )
         except httpx.HTTPError as exc:
             raise BoxError(
-                f"Could not reach a box at {self.base_url} — is it running? "
-                f"Start one with `make dev`, or set BOX_URL in a .env.\n{exc}"
+                f"Could not reach a box at {self.base_url} — is it on and on Wi-Fi? "
+                f"Set BOX_URL in a .env if box.local does not resolve.\n{exc}"
             ) from exc
 
         if r.status_code == 401:

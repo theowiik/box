@@ -1,0 +1,2 @@
+# Add an Iris USB Serial/JTAG link alongside the default transports.
+CONFIG_ESP_IRIS_TRANSPORT_USB_SERIAL_JTAG=y

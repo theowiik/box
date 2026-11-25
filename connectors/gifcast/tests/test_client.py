@@ -24,29 +24,24 @@ def clean_env(monkeypatch, tmp_path):
     os.environ.update(saved)
 
 
-def test_defaults_to_localhost():
-    assert box_url() == "http://localhost:8000"
+def test_defaults_to_box_local():
+    assert box_url() == "http://box.local"
 
 
 def test_explicit_url_wins(monkeypatch):
-    monkeypatch.setenv("BOX_URL", "http://from-env:8000")
+    monkeypatch.setenv("BOX_URL", "http://from-env")
     assert box_url("http://explicit:9000/") == "http://explicit:9000"
 
 
 def test_env_url_is_used(monkeypatch):
-    monkeypatch.setenv("BOX_URL", "http://elsewhere:8000/")
-    assert box_url() == "http://elsewhere:8000"
+    monkeypatch.setenv("BOX_URL", "http://192.168.0.228/")
+    assert box_url() == "http://192.168.0.228"
 
 
-def test_port_alone_is_enough(monkeypatch):
-    monkeypatch.setenv("BOX_PORT", "9000")
-    assert box_url() == "http://localhost:9000"
-
-
-def test_dotenv_supplies_the_port(tmp_path, monkeypatch):
-    (tmp_path / ".env").write_text("# my box moved\nBOX_PORT = 9100\n\n")
+def test_dotenv_supplies_the_url(tmp_path, monkeypatch):
+    (tmp_path / ".env").write_text("# my box\nBOX_URL = http://192.168.0.228\n\n")
     monkeypatch.chdir(tmp_path)
-    assert box_url() == "http://localhost:9100"
+    assert box_url() == "http://192.168.0.228"
 
 
 def test_dotenv_is_found_in_a_parent(tmp_path, monkeypatch):
@@ -58,17 +53,17 @@ def test_dotenv_is_found_in_a_parent(tmp_path, monkeypatch):
 
 
 def test_real_environment_beats_the_file(tmp_path, monkeypatch):
-    (tmp_path / ".env").write_text("BOX_PORT=9100\n")
+    (tmp_path / ".env").write_text("BOX_URL=http://from-file\n")
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setenv("BOX_PORT", "9200")
+    monkeypatch.setenv("BOX_URL", "http://from-env")
     load_dotenv()
-    assert box_url() == "http://localhost:9200"
+    assert box_url() == "http://from-env"
 
 
 def test_dotenv_search_stops_at_the_repo_root(tmp_path, monkeypatch):
     """A .env belonging to some parent directory is not ours to read."""
-    (tmp_path / ".env").write_text("BOX_PORT=9999\n")
+    (tmp_path / ".env").write_text("BOX_URL=http://not-ours\n")
     project = tmp_path / "project"
     (project / ".git").mkdir(parents=True)
     monkeypatch.chdir(project)
-    assert box_url() == "http://localhost:8000"
+    assert box_url() == "http://box.local"

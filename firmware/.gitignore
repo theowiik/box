@@ -1,0 +1,14 @@
+# ESP-IDF build output and downloaded components
+build/
+host/build/
+managed_components/
+sdkconfig
+sdkconfig.old
+# Machine-local settings, such as CONFIG_BOX_TOKEN
+sdkconfig.local.defaults
+# Device gateway state from mosaico.py
+.gateway/
+*.irisfw
+# Resolved with local paths to the Mosaico workspace, so machine-specific
+# (the Mosaico template ignores it too); versions are pinned in idf_component.yml.
+dependencies.lock

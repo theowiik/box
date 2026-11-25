@@ -11,3 +11,6 @@ venv/
 temp/
 .DS_Store
 .env
+
+# make screenshot
+box.png

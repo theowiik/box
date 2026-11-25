@@ -23,7 +23,7 @@ def build_parser() -> argparse.ArgumentParser:
         "gif", type=Path, help="path to a .gif (or any image PIL reads)"
     )
     parser.add_argument(
-        "--url", help="box base URL (default: http://localhost:8000, env: BOX_URL)"
+        "--url", help="box base URL (default: http://box.local, env: BOX_URL)"
     )
     parser.add_argument(
         "--token",
