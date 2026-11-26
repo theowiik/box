@@ -2,20 +2,49 @@
 
 Guidance for coding agents (and humans) working in this repository.
 
+## Setup
+
+A machine needs Docker, git and mise; everything else is pinned in
+`toolchain/versions` and fetched by `mise run setup` (any task does it on
+first use):
+
+- **The ESP-Mosaico workspace** (`esp-mosaico-vibe`: board support, ESP-Iris,
+  `mosaico.py`, docs) is checked out in **`.deps/esp-mosaico-vibe`**
+  (gitignored; `toolchain/fetch`). Read it from there: its `AGENTS.md` and
+  `docs/` for how the board and device tooling work,
+  `submodule/esp-mosaico-bsp` for the board's drivers,
+  `submodule/esp-mosaico-utils/ESP-Iris` for the USB/Wi-Fi device link.
+  Install, log and screenshot runs leave their logs in its `.codex-runs/`.
+  Never edit it: change the pin instead.
+- **ESP-IDF and Go** are in the dev image (`toolchain/Dockerfile`), with
+  ESP-IDF at `/opt/esp/idf` inside it. Read IDF sources with
+  `toolchain/run sh -c 'grep -rn … $IDF_PATH/components/…'`.
+
+Run tools through mise or `toolchain/run CMD` (for example
+`toolchain/run idf.py --version`), never from the host: the host may have no
+ESP-IDF or Go, or the wrong versions. To move a pin, edit
+`toolchain/versions`: the next task fetches it and rebuilds the image.
+
 ## Commands
 
-`mise.toml` is the front door: `mise tasks` lists them, and it pins Go
-(`mise install`). It loads machine settings from `.env` (see `.env.example`):
-`MOSAICO_WORKSPACE` for firmware builds, `MOSAICO_SHELL` if ESP-IDF is not
-loaded in the shell, `BOX_URL` if `box.local` does not resolve.
+`mise.toml` is the front door: `mise tasks` lists them. mise only launches:
+every task runs in the dev container, started by `toolchain/run`. The
+container keeps running between tasks (`docker exec` into it) because the
+Mosaico tools' device gateway must outlive each command; `mise run shell`
+opens a shell in it. `.env` (see `.env.example`) holds `BOX_*` settings, e.g.
+`BOX_URL` if `box.local` does not resolve.
 
-- `mise run check` — the core's tests on the host (ASan/UBSan) + box-services' gofmt, vet, tests
-- `mise run test-core` / `mise run test-services` — one side of that
+- `mise run setup` — fetch the workspace, build the dev image, print versions
+
+- `mise run check` — the core's tests on the host (ASan/UBSan) + box-essentials' gofmt, vet, tests
+- `mise run test-core` / `mise run test-essentials` — one side of that
+- `mise run web` — the box in a browser on :8080 (no hardware); send to it with `BOX_URL=http://localhost:8080`
 - `mise run firmware` / `mise run install` — build / build and install on the board (USB)
 - `mise run logs`, `mise run screenshot`, `mise run status` — observe the running box
-- `mise run send -- --title T TEXT`, `mise run demo -- beer`, `mise run gif -- FILE` (arguments after `--` go to box-services)
-- `mise run server` — box-services in Docker (on the always-on server)
-- One Go test: `cd connectors/box-services && go test ./internal/sources -run TestFeedLifecycle`
+- `mise run send -- --title T TEXT`, `mise run demo -- beer`, `mise run gif -- FILE` (arguments after `--` go to box-essentials)
+- `mise run server` — box-essentials in Docker (on the always-on server); its settings page is on :8090
+- `mise run essentials` — the same here, in the foreground (page on localhost:8090)
+- One Go test: `cd connectors/box-essentials && go test ./internal/sources -run TestFeedLifecycle`
 
 ## Project Structure
 
@@ -31,14 +60,18 @@ core/                     # The box's logic, portable C (no ESP-IDF); tests in c
 │   ├── api.h             # The HTTP API's JSON (status, display, settings)
 │   ├── box.h, display.h  # The whole box minus I/O; the display interface
 ├── fonts/, third_party/  # Inter (OFL, subset; fonts/embed.py), stb_truetype
-mosaico/                  # The ESP-Mosaico target (ESP-IDF)
-├── main/main.c           # Boot: Recovery support, runtime, network, HTTP
-└── components/
-    ├── box_device/       # runtime (lock, render task), display, Wi-Fi/mDNS/NTP, HTTP
-    └── app_config/       # Vibe Mode settings, read-only (Wi-Fi, brightness)
-connectors/box-services/  # Go, stdlib only: CLI + always-on service (weather, feeds,
-                          #   visuals, GIFs); Dockerfile
-compose.yaml              # box-services on the server
+displays/                 # What the box draws on: each one is the core + a screen + the API
+├── web/                  # The box in a browser (C: tiny HTTP server, page.html canvas)
+└── mosaico/              # The ESP-Mosaico (ESP-IDF)
+    ├── main/main.c       # Boot: Recovery support, runtime, network, HTTP
+    └── components/
+        ├── box_device/   # runtime (lock, render task), display, Wi-Fi/mDNS/NTP, HTTP
+        └── app_config/   # Vibe Mode settings, read-only (Wi-Fi, brightness)
+connectors/box-essentials/ # Go, stdlib only: the always-on basics (weather, feeds) and their
+                          #   settings page (internal/web), plus the CLI (visuals, GIFs); Dockerfile
+compose.yaml              # box-essentials on the server
+toolchain/                # The dev container: versions (the pins), Dockerfile, fetch, run (what mise calls)
+.deps/                    # Fetched, gitignored: esp-mosaico-vibe (the Mosaico workspace)
 ```
 
 ## Rules
@@ -46,10 +79,14 @@ compose.yaml              # box-services on the server
 - **The API describes content, not pixels.** Senders say text/title/image/
   colour; the box lays out, scales and styles. Keep new features in that
   shape, and keep the box dumb: anything that needs the internet or opinions
-  about content belongs in box-services.
+  about content belongs in box-essentials.
+- **Displays are interchangeable.** Anything a display needs from the core
+  goes through `box.h`/`display.h`/`api.h`; if a feature only works on one
+  display, it belongs in that display. Check new core behaviour on
+  `mise run web` as well as the board.
 - **The core stays portable.** `core/` includes no ESP-IDF, FreeRTOS or
   hardware headers; its CMake build compiles it on a PC and fails if it does.
-  ESP-IDF and hardware calls belong in `mosaico/components/box_device`.
+  ESP-IDF and hardware calls belong in `displays/mosaico/components/box_device`.
 - **Time is a parameter.** Scheduler and engine take `now`; tests drive time.
 - **Text never scrolls.** Both styles wrap and size text to fit, keeping
   words whole when any size allows; only text too long for the smallest size
@@ -71,10 +108,10 @@ compose.yaml              # box-services on the server
   esptool writes, no partition changes. `iris app-update` fails here (its full
   build trips a bootloader size check at the pinned ESP-IDF); use
   `system-update`, which `mise run install` does. After changing Kconfig defaults,
-  delete `mosaico/build/sdkconfig`.
+  delete `displays/mosaico/build/sdkconfig`.
 - **Acceptance needs live evidence:** `mise run status` over Wi-Fi and a
   `mise run screenshot`, not just a successful upload.
-- **box-services is standard-library Go** so it builds anywhere into one
+- **box-essentials is standard-library Go** so it builds anywhere into one
   static binary; keep it that way.
 - **No personal machine names** in anything committed: say "a server that
   stays on", not a hostname.

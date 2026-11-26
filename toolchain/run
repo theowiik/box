@@ -1,0 +1,76 @@
+#!/usr/bin/env bash
+# Run a command in the box's dev container: toolchain/run idf.py --version
+#
+# Builds the image the first time (a few GB: ESP-IDF and its compilers). The
+# container keeps running between commands, and each command is a
+# `docker exec` into it: the Mosaico tools start a device gateway that is meant
+# to outlive the command that started it, holding the board between installs,
+# logs and screenshots. A new image (after `docker build`) replaces the
+# container; `docker rm -f box-toolchain-…` stops it.
+#
+# The repo is mounted at the same path as here, and your home read-only so file
+# arguments (a GIF) resolve; commands run as you, so build output is yours.
+# It shares the host network (box.local over mDNS) and the board's USB serial
+# ports; see below.
+set -euo pipefail
+repo="$(cd "$(dirname "$0")/.." && pwd)"
+. "$repo/toolchain/versions"
+# The image is named for what goes into it, so a changed pin or Dockerfile
+# builds a new one (and replaces the container) on the next task.
+tag="$(cat "$repo/toolchain/versions" "$repo/toolchain/Dockerfile" \
+    "$repo/toolchain/entrypoint.sh" "$repo/toolchain/mosaico" | cksum | cut -d' ' -f1)"
+image="box-toolchain:$tag"
+# One container per checkout: it mounts that checkout.
+name="box-toolchain-$(printf %s "$repo" | cksum | cut -d' ' -f1)"
+workspace="$repo/.deps/esp-mosaico-vibe"
+
+"$repo/toolchain/fetch"
+if ! docker image inspect "$image" >/dev/null 2>&1; then
+    echo "toolchain: building the dev image (a few GB; the first time takes a while)..." >&2
+    docker build -t "$image" \
+        --build-arg IDF_COMMIT="$IDF_COMMIT" --build-arg GO_VERSION="$GO_VERSION" \
+        "$repo/toolchain" >&2
+fi
+
+want="$(docker image inspect -f '{{.Id}}' "$image") true"
+have="$(docker inspect -f '{{.Image}} {{.State.Running}}' "$name" 2>/dev/null || true)"
+if [ "$have" != "$want" ]; then
+    if [ "${have#* }" = true ]; then
+        # An old container: let its gateway give the board back first, or
+        # the board keeps a session for a gateway that no longer exists and
+        # refuses the next one until it is replugged.
+        echo "toolchain: replacing the dev container with the new image" >&2
+        timeout 30 docker exec "$name" /usr/local/bin/box-env \
+            mosaico iris release --project "$repo/displays/mosaico" >/dev/null 2>&1 || true
+    fi
+    docker rm -f "$name" >/dev/null 2>&1 || true
+    usb=()
+    if [ "$(uname)" = Linux ]; then
+        # The board is a USB serial device (/dev/ttyACM*, found through
+        # /dev/serial/by-path) that comes back as a new device during an
+        # install. So: the host's live /dev, but access only to USB serial
+        # ports (major 166) and USB devices (189), including ones that
+        # appear later.
+        usb=(-v /dev:/dev --device-cgroup-rule='c 166:* rmw' --device-cgroup-rule='c 189:* rmw')
+    fi
+    docker run -d --name "$name" --init "${usb[@]}" \
+        --network host \
+        --user "$(id -u):$(id -g)" \
+        -v "$HOME:$HOME:ro" \
+        -v "$repo:$repo" \
+        -v box-toolchain-cache:/home/dev/.cache \
+        -e MOSAICO_WORKSPACE="$workspace" \
+        --entrypoint sleep "$image" infinity >/dev/null
+fi
+
+tty=()
+[ -t 0 ] && [ -t 1 ] && tty=(-it)
+
+# The box's settings: .env's BOX_* lines, then any BOX_* set here, which win.
+env=()
+for var in $(compgen -e | grep '^BOX_' || true); do env+=(-e "$var"); done
+
+exec docker exec "${tty[@]}" -w "$PWD" \
+    --env-file <(grep -E '^BOX_[A-Z_]+=' "$repo/.env" 2>/dev/null | sed 's/[[:space:]]\{1,\}#.*//' || true) \
+    "${env[@]}" \
+    "$name" /usr/local/bin/box-env "$@"

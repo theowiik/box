@@ -2,8 +2,8 @@
 //
 // The core decides what to show and draws it as a small RGB frame (96x96 by
 // default). A display turns that frame into light: the ESP-Mosaico's screen
-// (mosaico/), an LED matrix on a Raspberry Pi, a window, a test. Adding a
-// target means implementing this, not touching the core.
+// (displays/mosaico), a browser (displays/web), an LED matrix on a Raspberry
+// Pi, a test. Adding one means implementing this, not touching the core.
 #pragma once
 
 #include <stdbool.h>

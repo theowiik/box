@@ -1,0 +1,428 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Box essentials</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='3' fill='%23111'/%3E%3Crect x='4' y='4' width='8' height='8' rx='1' fill='%23FFD54F'/%3E%3C/svg%3E">
+<style>
+:root {
+  --bg: #f4f4f2; --card: #fff; --ink: #1b1b1a; --muted: #6b6b66; --line: #e2e2dd;
+  --accent: #1f6feb; --ok: #1a7f37; --bad: #cf222e; --field: #fafaf8;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #111110; --card: #1a1a19; --ink: #ececea; --muted: #9a9a94; --line: #2c2c2a;
+    --accent: #4c8dff; --ok: #3fb950; --bad: #f85149; --field: #141413;
+    color-scheme: dark;
+  }
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0; background: var(--bg); color: var(--ink);
+  font: 15px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+main { max-width: 760px; margin: 0 auto; padding: 24px 16px 64px; }
+header { display: flex; align-items: center; gap: 14px; margin-bottom: 20px; }
+header h1 { font-size: 20px; margin: 0; }
+header p { margin: 0; color: var(--muted); font-size: 13px; }
+section {
+  background: var(--card); border: 1px solid var(--line); border-radius: 12px;
+  padding: 18px; margin-bottom: 16px;
+}
+section > h2 { font-size: 15px; margin: 0 0 12px; display: flex; align-items: center; gap: 8px; }
+section > h2 .grow { flex: 1; }
+label { display: block; font-size: 13px; color: var(--muted); margin-bottom: 4px; }
+input, select, button { font: inherit; color: inherit; }
+input[type=text], input[type=url], input[type=number], select {
+  width: 100%; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--field);
+}
+input:focus, select:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+button {
+  padding: 8px 14px; border-radius: 8px; border: 1px solid var(--line); background: var(--field); cursor: pointer;
+}
+button:hover { border-color: var(--muted); }
+button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+button.link { border: 0; background: none; padding: 0; color: var(--accent); }
+button.danger { color: var(--bad); }
+.row { display: grid; gap: 12px; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); margin-bottom: 12px; }
+.inline { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.muted { color: var(--muted); font-size: 13px; }
+.dot { width: 9px; height: 9px; border-radius: 50%; background: var(--muted); display: inline-block; }
+.dot.ok { background: var(--ok); } .dot.bad { background: var(--bad); }
+.switch { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--ink); margin: 0; cursor: pointer; }
+
+/* What the box shows, drawn like its square screen. */
+.screen-wrap { display: flex; gap: 18px; align-items: center; flex-wrap: wrap; }
+.screen {
+  width: 150px; aspect-ratio: 1; border-radius: 14px; background: #000; color: #fff; flex: none;
+  display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center;
+  padding: 12px; border: 6px solid #222; overflow: hidden;
+}
+.screen .t { font-size: 12px; opacity: .75; margin-bottom: 4px; }
+.screen .x { font-size: 18px; font-weight: 600; overflow-wrap: anywhere; }
+.facts { flex: 1; min-width: 200px; }
+.facts div { margin-bottom: 4px; }
+
+.places { list-style: none; margin: 6px 0 0; padding: 0; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+.places:empty { display: none; }
+.places li { padding: 8px 10px; cursor: pointer; border-top: 1px solid var(--line); }
+.places li:first-child { border-top: 0; }
+.places li:hover, .places li:focus { background: var(--field); outline: none; }
+
+.feed { border: 1px solid var(--line); border-radius: 10px; padding: 14px; margin-bottom: 10px; }
+.feed .head { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
+.feed .head strong { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.report { font-size: 13px; color: var(--muted); }
+.report.bad { color: var(--bad); }
+
+.savebar {
+  position: sticky; bottom: 12px; display: flex; gap: 12px; align-items: center; justify-content: flex-end;
+  background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 10px 14px;
+  box-shadow: 0 6px 24px rgba(0,0,0,.12);
+}
+.savebar .msg { flex: 1; font-size: 13px; }
+.msg.bad { color: var(--bad); } .msg.ok { color: var(--ok); }
+details summary { cursor: pointer; color: var(--muted); font-size: 13px; }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <svg width="36" height="36" viewBox="0 0 16 16" aria-hidden="true"><rect width="16" height="16" rx="3" fill="#111"/><rect x="4" y="4" width="8" height="8" rx="1" fill="#FFD54F"/></svg>
+    <div>
+      <h1>Box essentials</h1>
+      <p>The weather and feeds your box shows when nothing else is on. It shows the time by itself.</p>
+    </div>
+  </header>
+
+  <section>
+    <h2><span class="dot" id="box-dot"></span><span class="grow">The box</span>
+      <span class="muted" id="box-url"></span></h2>
+    <div class="screen-wrap">
+      <div class="screen" id="screen"><div class="x">…</div></div>
+      <div class="facts" id="facts"><div class="muted">Looking for the box…</div></div>
+    </div>
+    <div class="row" style="margin-top:14px">
+      <div>
+        <label for="style">Style</label>
+        <select id="style"><option value="smooth">Smooth</option><option value="led">LED</option></select>
+      </div>
+      <div>
+        <label for="brightness">Brightness <span id="brightness-val"></span></label>
+        <input type="range" id="brightness" min="0.05" max="1" step="0.05" style="width:100%">
+      </div>
+    </div>
+    <details>
+      <summary>Send something now</summary>
+      <div class="row" style="margin-top:10px">
+        <div><label for="send-title">Title</label><input type="text" id="send-title" maxlength="80" placeholder="Hi"></div>
+        <div style="grid-column: span 2"><label for="send-text">Text</label><input type="text" id="send-text" maxlength="512" placeholder="hello"></div>
+      </div>
+      <div class="inline">
+        <button id="send">Send</button>
+        <select id="visual" style="width:auto"></select>
+        <button id="play">Play</button>
+        <span class="grow" style="flex:1"></span>
+        <button class="danger" id="clear">Clear the screen</button>
+      </div>
+      <p class="muted" id="send-msg"></p>
+    </details>
+  </section>
+
+  <section>
+    <h2><span class="grow">Weather</span>
+      <label class="switch"><input type="checkbox" id="w-enabled"> On</label></h2>
+    <label for="place">Place</label>
+    <input type="text" id="place" autocomplete="off" placeholder="Search for a city…">
+    <ul class="places" id="places"></ul>
+    <p class="muted" id="place-where"></p>
+    <div class="row">
+      <div>
+        <label for="units">Units</label>
+        <select id="units"><option value="c">Celsius</option><option value="f">Fahrenheit</option></select>
+      </div>
+      <div>
+        <label for="w-every">Check every (minutes)</label>
+        <input type="number" id="w-every" min="1" step="1">
+      </div>
+    </div>
+    <div class="report" id="r-weather"></div>
+  </section>
+
+  <section>
+    <h2><span class="grow">Feeds</span><button class="link" id="add-feed">+ Add a feed</button></h2>
+    <p class="muted" style="margin-top:-6px">RSS or Atom. Something new shows its title, or plays a visual.</p>
+    <div id="feeds"></div>
+  </section>
+
+  <section>
+    <h2>Where the box is</h2>
+    <label for="box-url-input">Address</label>
+    <input type="url" id="box-url-input" placeholder="">
+    <p class="muted">Leave empty to find it as box.local. If that does not work on your network, use the IP it shows at boot.</p>
+  </section>
+
+  <div class="savebar">
+    <span class="msg" id="save-msg"></span>
+    <button id="revert">Undo changes</button>
+    <button class="primary" id="save">Save</button>
+  </div>
+</main>
+
+<template id="feed-tpl">
+  <div class="feed">
+    <div class="head">
+      <strong class="f-label"></strong>
+      <label class="switch"><input type="checkbox" class="f-enabled"> On</label>
+      <button class="link danger f-remove">Remove</button>
+    </div>
+    <div class="row">
+      <div><label>Title on screen</label><input type="text" class="f-title" maxlength="80"></div>
+      <div><label>Name (short, for the box)</label><input type="text" class="f-name" maxlength="32" pattern="[a-z0-9][a-z0-9-]*"></div>
+    </div>
+    <div class="row"><div><label>Feed address</label><input type="url" class="f-url" placeholder="https://example.com/feed.xml"></div></div>
+    <div class="row">
+      <div><label>When something is new</label><select class="f-show"></select></div>
+      <div><label>Priority</label><select class="f-priority"></select></div>
+      <div><label>Check every (minutes)</label><input type="number" class="f-every" min="1" step="1"></div>
+    </div>
+    <div class="report f-report"></div>
+  </div>
+</template>
+
+<script>
+"use strict";
+const $ = (id) => document.getElementById(id);
+let saved = null;   // the settings as the server has them
+let draft = null;   // what the page shows
+let meta = { visuals: [], priorities: [], default_box_url: "" };
+
+async function api(method, path, body) {
+  const opts = { method, headers: {} };
+  if (body !== undefined) { opts.headers["Content-Type"] = "application/json"; opts.body = JSON.stringify(body); }
+  const res = await fetch(path, opts);
+  const data = res.status === 204 ? null : await res.json().catch(() => null);
+  if (!res.ok) throw new Error((data && data.detail) || res.statusText);
+  return data;
+}
+
+const clone = (v) => JSON.parse(JSON.stringify(v));
+const settingsOf = (v) => ({ box_url: v.box_url, weather: v.weather, feeds: v.feeds });
+const dirty = () => JSON.stringify(draft) !== JSON.stringify(saved);
+
+function ago(iso) {
+  const s = Math.round((Date.now() - new Date(iso)) / 1000);
+  if (s < 60) return "just now";
+  if (s < 3600) return Math.round(s / 60) + " min ago";
+  return Math.round(s / 3600) + " h ago";
+}
+
+function describeReport(el, r, what) {
+  el.classList.toggle("bad", !!(r && r.error));
+  if (!r) { el.textContent = what; return; }
+  if (r.error) el.textContent = "Last check " + ago(r.at) + ": " + r.error;
+  else if (r.sent) el.textContent = "Sent " + ago(r.at) + ": " + r.shown;
+  else el.textContent = "Checked " + ago(r.at) + ": nothing new.";
+}
+
+// --- settings -------------------------------------------------------------
+
+function placeText(p) { return [p.name, p.region, p.country].filter((x, i, a) => x && a.indexOf(x) === i).join(", "); }
+
+function render() {
+  const w = draft.weather;
+  $("w-enabled").checked = w.enabled;
+  $("place").value = w.place.name;
+  $("place-where").textContent = placeText(w.place) + "  ·  " + w.place.latitude.toFixed(2) + ", " + w.place.longitude.toFixed(2);
+  $("units").value = w.fahrenheit ? "f" : "c";
+  $("w-every").value = w.every_minutes;
+  $("box-url-input").value = draft.box_url;
+  $("box-url-input").placeholder = meta.default_box_url;
+
+  const list = $("feeds");
+  list.replaceChildren();
+  draft.feeds.forEach((f, i) => {
+    const el = $("feed-tpl").content.firstElementChild.cloneNode(true);
+    const q = (c) => el.querySelector(c);
+    q(".f-label").textContent = f.title || f.name || "New feed";
+    q(".f-enabled").checked = f.enabled;
+    q(".f-title").value = f.title;
+    q(".f-name").value = f.name;
+    q(".f-url").value = f.url;
+    q(".f-every").value = f.every_minutes;
+    q(".f-show").replaceChildren(new Option("Show the titles", "title"),
+      ...meta.visuals.map((v) => new Option("Play " + v, v)));
+    q(".f-show").value = f.show || "title";
+    q(".f-priority").replaceChildren(...meta.priorities.map((p) => new Option(p[0].toUpperCase() + p.slice(1), p)));
+    q(".f-priority").value = f.priority || "normal";
+    el.dataset.name = f.name;
+    const set = (key, conv = (x) => x) => (e) => { f[key] = conv(e.target.type === "checkbox" ? e.target.checked : e.target.value); changed(); };
+    q(".f-enabled").onchange = set("enabled");
+    q(".f-title").oninput = (e) => {
+      // A new feed's name follows its title until edited.
+      if (f._named === false) { f.name = slug(e.target.value); q(".f-name").value = f.name; }
+      set("title")(e); q(".f-label").textContent = f.title || "New feed";
+    };
+    q(".f-name").oninput = (e) => { f._named = true; set("name")(e); };
+    q(".f-url").oninput = set("url");
+    q(".f-show").onchange = set("show");
+    q(".f-priority").onchange = set("priority", (p) => (p === "normal" ? "" : p));
+    q(".f-every").oninput = set("every_minutes", Number);
+    q(".f-remove").onclick = () => { draft.feeds.splice(i, 1); render(); changed(); };
+    list.append(el);
+  });
+  if (!draft.feeds.length) list.innerHTML = '<p class="muted">No feeds.</p>';
+  changed();
+}
+
+function slug(s) {
+  return s.toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "")
+    .replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 32);
+}
+
+function changed(msg, cls) {
+  const m = $("save-msg");
+  m.className = "msg " + (cls || "");
+  m.textContent = msg || (dirty() ? "Unsaved changes." : "");
+  $("save").disabled = !dirty();
+  $("revert").disabled = !dirty();
+}
+
+$("w-enabled").onchange = (e) => { draft.weather.enabled = e.target.checked; changed(); };
+$("units").onchange = (e) => { draft.weather.fahrenheit = e.target.value === "f"; changed(); };
+$("w-every").oninput = (e) => { draft.weather.every_minutes = Number(e.target.value); changed(); };
+$("box-url-input").oninput = (e) => { draft.box_url = e.target.value; changed(); };
+$("add-feed").onclick = () => {
+  draft.feeds.push({ enabled: true, name: "", title: "", url: "", show: "title", priority: "", every_minutes: 10, _named: false });
+  render();
+  const inputs = document.querySelectorAll(".f-title");
+  inputs[inputs.length - 1].focus();
+};
+$("revert").onclick = () => { draft = clone(saved); render(); };
+$("save").onclick = async () => {
+  const body = clone(draft);
+  body.feeds.forEach((f) => delete f._named);
+  $("save").disabled = true;
+  changed("Saving…");
+  try {
+    const v = await api("PUT", "/api/settings", body);
+    saved = settingsOf(v); draft = clone(saved);
+    render();
+    changed("Saved. The box gets the new weather and feeds now.", "ok");
+    setTimeout(refresh, 2500);
+  } catch (err) {
+    changed(err.message, "bad");
+    $("save").disabled = false;
+  }
+};
+window.addEventListener("beforeunload", (e) => { if (draft && dirty()) e.preventDefault(); });
+
+// Place search: ask as you type, pick from the list.
+let searchTimer, searchSeq = 0;
+$("place").oninput = (e) => {
+  clearTimeout(searchTimer);
+  const q = e.target.value.trim();
+  searchTimer = setTimeout(async () => {
+    const seq = ++searchSeq;
+    let places = [];
+    try { places = q.length >= 2 ? await api("GET", "/api/places?q=" + encodeURIComponent(q)) : []; }
+    catch (err) { $("place-where").textContent = err.message; }
+    if (seq !== searchSeq) return;
+    $("places").replaceChildren(...places.map((p) => {
+      const li = document.createElement("li");
+      li.tabIndex = 0;
+      li.textContent = placeText(p);
+      li.onclick = li.onkeydown = (ev) => {
+        if (ev.type === "keydown" && ev.key !== "Enter") return;
+        draft.weather.place = p;
+        $("places").replaceChildren();
+        render();
+      };
+      return li;
+    }));
+  }, 250);
+};
+$("place").onblur = () => setTimeout(() => {
+  if (!$("places").contains(document.activeElement)) { $("places").replaceChildren(); $("place").value = draft.weather.place.name; }
+}, 200);
+
+// --- the box ----------------------------------------------------------------
+
+let touching = false;   // do not move the slider under the pointer
+
+async function refresh() {
+  let o;
+  try { o = await api("GET", "/api/overview"); } catch { return; }
+  $("box-url").textContent = o.box_url.replace(/^https?:\/\//, "");
+  $("box-dot").className = "dot " + (o.online ? "ok" : "bad");
+  const screen = $("screen"), facts = $("facts");
+  if (!o.online) {
+    screen.innerHTML = '<div class="x" style="color:#888">offline</div>';
+    facts.innerHTML = "";
+    facts.append(Object.assign(document.createElement("div"), { textContent: "Not reachable: " + o.error, className: "muted" }));
+  } else {
+    const st = o.status, s = st.showing || {};
+    screen.replaceChildren();
+    screen.style.background = s.type === "color" ? s.color : "#000";
+    const add = (cls, text, color) => {
+      const d = document.createElement("div");
+      d.className = cls; d.textContent = text;
+      if (color) d.style.color = color;
+      screen.append(d);
+    };
+    if (s.type === "text") { if (s.title) add("t", s.title); add("x", s.text, s.color); }
+    else if (s.type === "image") add("x", "▶ image");
+    else if (s.type === "clock" || !s.type) add("x", new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }));
+    const rows = [
+      ["Showing", s.source ? s.source + " (" + s.priority + ")" : "the clock"],
+      ["Waiting", st.queued + " in the queue"],
+      ["When idle", (st.ambient && st.ambient.length ? st.ambient.join(", ") + ", " : "") + "the clock"],
+    ];
+    facts.replaceChildren(...rows.map(([k, v]) => {
+      const d = document.createElement("div");
+      d.innerHTML = '<span class="muted"></span> ';
+      d.firstChild.textContent = k;
+      d.append(v);
+      return d;
+    }));
+    $("style").value = st.style;
+    if (!touching) { $("brightness").value = st.brightness; $("brightness-val").textContent = Math.round(st.brightness * 100) + "%"; }
+  }
+  describeReport($("r-weather"), o.sources.weather, draft && draft.weather.enabled ? "Not checked yet." : "Off.");
+  document.querySelectorAll(".feed").forEach((el) => {
+    const f = draft.feeds.find((x) => x.name === el.dataset.name);
+    describeReport(el.querySelector(".f-report"), o.sources[el.dataset.name], f && f.enabled ? "Not checked yet." : "Off.");
+  });
+}
+
+async function boxDo(method, path, body, ok) {
+  const m = $("send-msg");
+  try { await api(method, path, body); m.textContent = ok || ""; setTimeout(refresh, 400); }
+  catch (err) { m.textContent = err.message; }
+}
+
+$("style").onchange = (e) => boxDo("PATCH", "/api/box/display", { style: e.target.value });
+$("brightness").oninput = (e) => { touching = true; $("brightness-val").textContent = Math.round(e.target.value * 100) + "%"; };
+$("brightness").onchange = async (e) => { await boxDo("PATCH", "/api/box/display", { brightness: Number(e.target.value) }); touching = false; };
+$("send").onclick = () => boxDo("POST", "/api/box/send", { title: $("send-title").value, text: $("send-text").value }, "Sent.");
+$("play").onclick = () => boxDo("POST", "/api/box/send", { visual: $("visual").value }, "Playing.");
+$("clear").onclick = () => boxDo("POST", "/api/box/clear", {}, "Cleared.");
+
+(async () => {
+  try {
+    const v = await api("GET", "/api/settings");
+    meta = v;
+    saved = settingsOf(v); draft = clone(saved);
+    $("visual").replaceChildren(...v.visuals.map((x) => new Option(x, x)));
+    render();
+  } catch (err) {
+    changed("Could not load the settings: " + err.message, "bad");
+  }
+  refresh();
+  setInterval(refresh, 5000);
+})();
+</script>
+</body>
+</html>

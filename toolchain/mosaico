@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+# The ESP-Mosaico workspace's device tool (install, logs, screenshots, status).
+exec python "$MOSAICO_WORKSPACE/mosaico.py" --workspace "$MOSAICO_WORKSPACE" "$@"

@@ -1,0 +1,13 @@
+# Everything the box builds against, pinned. toolchain/run reads this: change a
+# line and the next task fetches and rebuilds what changed (or `mise run setup`).
+
+# The ESP-Mosaico workspace: board support, ESP-Iris, mosaico.py, docs.
+# Checked out in .deps/esp-mosaico-vibe.
+VIBE_REPO=https://github.com/esp-mosaico/esp-mosaico-vibe.git
+VIBE_COMMIT=1fbf0f704e8a30d2acdc7d4416d5895cfc96dd45
+
+# The ESP-IDF commit that workspace requires (not a release). In the image.
+IDF_COMMIT=7b9cc1ac79f865983f59bb8ff3ff43eb74ff1dbe
+
+# Go, for box-essentials. In the image.
+GO_VERSION=1.26.11

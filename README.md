@@ -4,73 +4,96 @@
     <img src="assets/logo.png" alt="Logo" width="250px"/>
 </p>
 
-An [ESP-Mosaico](https://mosaico.ai/en) on your desk that shows whatever you
-send it on its 480×480 screen: real text, images, or an LED-panel look. The box
-itself only does the core: it receives events over Wi-Fi, decides what gets the
-screen, and draws it. Everything with an opinion about *content* — weather, feeds, GIFs — is a
-connector on some other machine that POSTs to it.
+A little screen on your desk that shows whatever you send it: messages,
+the weather, a GIF, a pint for every new bar review. You POST *content*
+(text, an image, a colour) to its HTTP API; the box decides what gets the
+screen, lays it out and draws it, as crisp text or an LED-panel look. When
+nothing is on, it shows the time.
+
+The box is the part in the middle: an API, a queue and a renderer, in
+portable C. What it draws on is a **display**, and what feeds it is a
+**connector**. Both are swappable.
 
 ```mermaid
 flowchart LR
-    web(["🌐 The internet<br/>news and review feeds"])
+    web(["🌐 The internet<br/>weather, feeds"])
+    you(["🧑 You"])
 
-    subgraph server["🖥️ Always-on server · Docker Compose"]
-        sources["☀️ Weather<br/>📰 Feeds<br/>🍺 Animations"]
+    subgraph connectors["📡 Connectors"]
+        essentials["<b>box-essentials</b><br/>☀️ Weather · 📰 Feeds<br/>⚙️ Settings page"]
+        tools["💬 Messages · 🎞️ GIFs<br/>curl, scripts, anything"]
     end
 
-    subgraph laptop["💻 Your laptop"]
-        tools["💬 Messages<br/>🎞️ GIFs<br/>🌈 Demos"]
-    end
-
-    subgraph box["📟 The box (ESP-Mosaico)"]
+    subgraph box["📟 The box"]
         direction TB
-        inbox["📥 <b>Inbox</b><br/>takes events over Wi-Fi"]
+        inbox["📥 <b>API</b><br/>content, not pixels"]
         queue["🚦 <b>Queue</b><br/>urgent first,<br/>one at a time"]
-        idle["🔁 <b>Idle loop</b><br/>ambient cards or local clock<br/>when nothing's queued"]
-        screen["✨ <b>Screen</b><br/>Square pixels,<br/>text sized to fit"]
-        inbox --> queue --> screen
-        inbox --> idle --> screen
+        idle["🔁 <b>Idle loop</b><br/>ambient cards,<br/>else the clock"]
+        draw["✨ <b>Renderer</b><br/>text sized to fit,<br/>smooth or LED style"]
+        inbox --> queue --> draw
+        inbox --> idle --> draw
     end
 
-    web --> sources
-    sources -->|Wi-Fi| box
-    tools -->|Wi-Fi| box
+    subgraph displays["🖼️ Displays"]
+        mosaico["ESP-Mosaico<br/>480×480 AMOLED, Wi-Fi"]
+        browser["Web page<br/>for testing, no hardware"]
+    end
+
+    web --> essentials
+    you --> essentials
+    essentials -->|HTTP| inbox
+    tools -->|HTTP| inbox
+    draw --> mosaico
+    draw --> browser
 
     classDef thing fill:#ffffff,stroke:#d0d7de,color:#1f2328,rx:8,ry:8
     classDef step fill:#ffffff,stroke:#2da44e,stroke-width:2px,color:#1f2328
-    class web,sources,tools thing
-    class inbox,queue,idle,screen step
-    style server fill:#ddf4ff,stroke:#54aeff,color:#0a3069
-    style laptop fill:#fff8c5,stroke:#d4a72c,color:#4d2d00
+    class web,you,essentials,tools,mosaico,browser thing
+    class inbox,queue,idle,draw step
+    style connectors fill:#ddf4ff,stroke:#54aeff,color:#0a3069
+    style displays fill:#fff8c5,stroke:#d4a72c,color:#4d2d00
     style box fill:#dafbe1,stroke:#2da44e,color:#044f1e
     linkStyle 0,1,2,3 stroke:#2da44e,stroke-width:2px
 ```
 
-Any machine on the network can be a connector. If the one running the sources
-goes down, start them anywhere else: the box doesn't care who talks to it.
+## Try it
 
-## Start
+All you need is Docker, git and [mise](https://mise.jdx.dev). `mise run setup`
+fetches the rest at pinned versions ([`toolchain/versions`](toolchain/versions))
+into a dev container; every task runs there.
 
-The board needs the box firmware once (`mise run install`, see
-[Firmware](#firmware)) and Wi-Fi, which it takes from the Mosaico's own Vibe
-Mode settings. At boot it shows its address and answers at **http://box.local**.
-When nothing else is on, it shows the time.
+```bash
+mise run web                           # the box in a browser: http://localhost:8080
+BOX_URL=http://localhost:8080 mise run send -- --title Hi "hello"
+```
+
+With real hardware the box answers at **http://box.local**, and the same
+commands work without `BOX_URL`:
 
 ```bash
 mise run send -- --title Hi "hello"   # some text, now
 mise run demo -- beer                  # rainbow, life, gradient, beer
 mise run gif -- party.gif              # a GIF
 mise run status                        # what is on screen
-mise run server                        # weather and feeds, on the server
+mise run server                        # weather and feeds, on a server (settings on :8090)
 mise tasks                             # everything else
 ```
 
-Those run [`box-services`](connectors/box-services), one Go program. The tasks
-are in [`mise.toml`](mise.toml), which also pins Go: with
-[mise](https://mise.jdx.dev) installed, `mise install` gets it. The server
-needs only Docker. If `box.local` does not
-resolve on your network, put the box's IP in a `.env` (copy
-[.env.example](.env.example)): `BOX_URL=http://192.168.0.228`.
+If `box.local` does not resolve on your network, put the box's address in a
+`.env` (copy [.env.example](.env.example)): `BOX_URL=http://192.168.0.228`.
+
+## Displays
+
+| Display | | |
+| --- | --- | --- |
+| [Web page](displays/web) | `mise run web` | The core with a small HTTP server; the screen is a canvas in your browser. For trying things and testing connectors without hardware |
+| [ESP-Mosaico](displays/mosaico) | `mise run install` | A 480×480 AMOLED desk display with Wi-Fi. The box runs on the board itself; settings in [its README](displays/mosaico/README.md) |
+
+A display gives the core a size and a function that takes finished frames
+([`core/include/box/display.h`](core/include/box/display.h)), and serves the
+API with the core's own JSON helpers. Everything about *what* is shown stays
+in [`core/`](core), tested on any machine; adding a display (an LED matrix on
+a Raspberry Pi, say) does not touch it.
 
 ## Sending something
 
@@ -114,44 +137,26 @@ screen, and an interrupted event comes back with the time it had left.
 Errors are `{"detail": "..."}`: 422 for an invalid event, 503 when the queue,
 the rotation or image memory is full.
 
-## What runs where
+## Connectors
 
-**On the box: only the core.** [`core/`](core) validates events, schedules
-them and draws them, in portable C (tested on any machine).
-[`mosaico/`](mosaico) adds the screen driver, Wi-Fi, HTTP and the clock. Its
-state is memory: after a reboot the queue and rotation are empty until the
-services post again (the weather refreshes every minute).
+Anything that can POST is a connector; there is no SDK to keep in sync.
 
-**On a server that stays on:** [`box-services`](connectors/box-services) in
-Docker (`mise run server`, or `docker compose up -d --build`): the weather, RSS
-feeds, and visuals rendered to images. Compose uses the host network to reach
-`box.local` over mDNS and keeps feed history in a named volume. If that
-server goes down, run it anywhere else: the box does not care who talks to it.
+**[box-essentials](connectors/box-essentials)** runs on a server that stays on,
+in Docker (`mise run server`, or `docker compose up -d --build`): the real
+weather (Open-Meteo) as an ambient card, and RSS feeds. Set it up on its
+page, **http://&lt;the server&gt;:8090**: where the weather is for, which feeds to
+follow, where the box is. The same program sends one-offs from the command
+line (`mise run send`, `demo`, `gif`).
 
-**Anywhere else:** the same `box-services` binary sends one-offs, or `curl`
-does. There is no SDK to keep in sync.
-
-## Firmware
-
-[`mosaico/`](mosaico) is an ESP-IDF application for the ESP-Mosaico. It
-builds against an [esp-mosaico-vibe](https://github.com/esp-mosaico/esp-mosaico-vibe)
-workspace (board support, ESP-Iris, install tooling), set up per its README.
-Point `MOSAICO_WORKSPACE` at it in `.env`, plug the board in over USB, and:
-
-```bash
-mise run install      # build and install (keeps the Mosaico's Vibe Mode intact)
-mise run logs         # follow the board's log
-mise run screenshot   # save the screen to box.png
-```
-
-Hold the AI button while powering on to get back to Vibe Mode. Build options
-(hostname, a bearer token for writes, the default style, the LED grid, time
-zone) are in [mosaico/README.md](mosaico/README.md).
+The box keeps only memory: after a restart its queue and rotation are empty
+until connectors post again. The clock is the box's own, so it keeps time
+when every connector is down; and if the server goes down, run
+box-essentials anywhere else.
 
 ## Development
 
 ```bash
-mise run check    # the core's tests (ASan/UBSan); box-services' gofmt, vet, tests
+mise run check    # the core's tests (ASan/UBSan); box-essentials' gofmt, vet, tests
 mise run format
 ```
 

@@ -2,7 +2,7 @@
 # no ESP-IDF, no FreeRTOS, no display drivers — so any target can use it.
 #
 # Built two ways:
-#  - as an ESP-IDF component, when a target such as mosaico/ lists this
+#  - as an ESP-IDF component, when a target such as displays/mosaico lists this
 #    directory in EXTRA_COMPONENT_DIRS (cJSON comes from idf_component.yml);
 #  - as a plain CMake project on any machine, with its tests:
 #      cmake -S core -B core/build && cmake --build core/build && core/build/box_core_tests

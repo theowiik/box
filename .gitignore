@@ -12,5 +12,13 @@ temp/
 .DS_Store
 .env
 
-# make screenshot
+# Fetched dependencies (toolchain/fetch): the ESP-Mosaico workspace
+.deps/
+
+# mise run screenshot
 box.png
+
+# The Mosaico tools' device gateway state and install bundles, wherever the
+# ESP-IDF project is: machine-local, with local paths in them.
+.gateway/
+*.irisfw

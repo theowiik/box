@@ -1,16 +1,18 @@
-# The part of the box that stays on: box-services (weather, feeds, visuals)
+# The part of the box that stays on: box-essentials, the weather and feeds
 # posting to the box over Wi-Fi. On the server:
 #
 #   docker compose up -d --build
 #
-# Settings come from .env (see .env.example); none are required.
+# then set it up at http://<the server>:8090. The .env (see .env.example) is
+# optional.
 name: box
 services:
-  box-services:
-    build: connectors/box-services
+  box-essentials:
+    build: connectors/box-essentials
     restart: unless-stopped
     # The host's network: box.local is found over mDNS, link-local multicast
-    # that Docker's own bridge network does not carry.
+    # that Docker's own bridge network does not carry. The settings page is
+    # on the host's port 8090 (BOX_WEB_ADDR to move it).
     network_mode: host
     env_file:
       - path: .env
@@ -18,6 +20,8 @@ services:
     environment:
       BOX_STATE_DIR: /state
     volumes:
+      # The settings and feed history. (Named from when this was only the
+      # sources; kept so an existing install keeps its history.)
       - sources-state:/state
 
 volumes:

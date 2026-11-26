@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+# Check out the ESP-Mosaico workspace at the commit toolchain/versions pins,
+# in .deps/esp-mosaico-vibe (gitignored). Does nothing when it already is.
+set -euo pipefail
+repo="$(cd "$(dirname "$0")/.." && pwd)"
+. "$repo/toolchain/versions"
+dir="$repo/.deps/esp-mosaico-vibe"
+submodules=(submodule/esp-mosaico-utils submodule/esp-mosaico-bsp)
+
+if [ "$(git -C "$dir" rev-parse HEAD 2>/dev/null || true)" = "$VIBE_COMMIT" ] \
+    && [ -f "$dir/submodule/esp-mosaico-bsp/.git" ] && [ -f "$dir/submodule/esp-mosaico-utils/.git" ]; then
+    exit 0
+fi
+echo "toolchain: fetching esp-mosaico-vibe at ${VIBE_COMMIT:0:12} into .deps/" >&2
+if [ ! -d "$dir/.git" ]; then
+    mkdir -p "$dir"
+    git -C "$dir" init -q
+    git -C "$dir" remote add origin "$VIBE_REPO"
+fi
+git -C "$dir" fetch -q --depth 1 origin "$VIBE_COMMIT"
+git -C "$dir" -c advice.detachedHead=false checkout -q FETCH_HEAD
+git -C "$dir" submodule -q update --init --depth 1 "${submodules[@]}"

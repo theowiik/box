@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Box in a browser</title>
+<style>
+:root { --bg: #f4f4f2; --ink: #1b1b1a; --muted: #6b6b66; --line: #dcdcd6; --field: #fff; --accent: #1f6feb; }
+@media (prefers-color-scheme: dark) {
+  :root { --bg: #111110; --ink: #ececea; --muted: #9a9a94; --line: #2c2c2a; --field: #1a1a19; --accent: #4c8dff; }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--ink); font: 15px/1.45 system-ui, sans-serif; }
+main { max-width: 560px; margin: 0 auto; padding: 24px 16px 48px; }
+h1 { font-size: 18px; margin: 0 0 4px; }
+p { margin: 0 0 16px; color: var(--muted); font-size: 13px; }
+.bezel { background: #1c1c1c; border-radius: 22px; padding: 14px; box-shadow: 0 10px 30px rgba(0,0,0,.25); }
+canvas { display: block; width: 100%; aspect-ratio: 1; border-radius: 8px; background: #000; image-rendering: auto; }
+form { display: grid; grid-template-columns: 1fr 2fr auto; gap: 8px; margin-top: 18px; }
+input, select, button { font: inherit; color: inherit; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--field); min-width: 0; }
+button { cursor: pointer; }
+button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+.row { display: flex; gap: 8px; margin-top: 8px; flex-wrap: wrap; align-items: center; }
+#msg { font-size: 13px; color: var(--muted); margin-left: auto; }
+code { font-size: 12px; }
+@media (max-width: 480px) { form { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<main>
+  <h1>Box in a browser</h1>
+  <p>The box's core behind its usual API, drawing here instead of on hardware.
+     Point a connector at <code id="api"></code>.</p>
+  <div class="bezel"><canvas id="screen"></canvas></div>
+  <form id="send">
+    <input id="title" placeholder="Title" maxlength="80">
+    <input id="text" placeholder="Some text" maxlength="512" required>
+    <button class="primary">Send</button>
+  </form>
+  <div class="row">
+    <select id="priority" title="Priority">
+      <option value="normal">Normal</option><option value="ambient">Ambient</option>
+      <option value="alert">Alert</option><option value="alarm">Alarm</option>
+    </select>
+    <select id="style" title="Style"><option value="smooth">Smooth</option><option value="led">LED</option></select>
+    <button type="button" id="clear">Clear</button>
+    <span id="msg"></span>
+  </div>
+</main>
+<script>
+"use strict";
+const canvas = document.getElementById("screen"), ctx = canvas.getContext("2d");
+const msg = (t) => (document.getElementById("msg").textContent = t);
+document.getElementById("api").textContent = location.origin + "/api/events";
+let version = null, image = null;
+
+async function poll() {
+  try {
+    const res = await fetch("/frame" + (version === null ? "" : "?since=" + version));
+    if (res.status === 200) {
+      const size = +res.headers.get("X-Size"), rgb = new Uint8Array(await res.arrayBuffer());
+      if (!image || image.width !== size) {
+        canvas.width = canvas.height = size;
+        image = ctx.createImageData(size, size);
+      }
+      const px = image.data;
+      for (let i = 0, j = 0; i < rgb.length; i += 3, j += 4) {
+        px[j] = rgb[i]; px[j + 1] = rgb[i + 1]; px[j + 2] = rgb[i + 2]; px[j + 3] = 255;
+      }
+      ctx.putImageData(image, 0, 0);
+      canvas.style.filter = "brightness(" + Math.max(0.05, +res.headers.get("X-Brightness")) + ")";
+      version = res.headers.get("X-Frame");
+    }
+  } catch { await new Promise((r) => setTimeout(r, 1000)); }
+  setTimeout(poll, 40);
+}
+
+async function api(method, path, body) {
+  const res = await fetch(path, { method, headers: { "Content-Type": "application/json" },
+                                  body: body && JSON.stringify(body) });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.detail || res.statusText);
+  return data;
+}
+
+document.getElementById("send").onsubmit = async (e) => {
+  e.preventDefault();
+  try {
+    const a = await api("POST", "/api/events", {
+      source: "web", priority: document.getElementById("priority").value,
+      content: { type: "text", title: document.getElementById("title").value,
+                 text: document.getElementById("text").value } });
+    msg("Shown for " + a.duration + "s" + (a.queued ? ", " + a.queued + " queued" : ""));
+  } catch (err) { msg(err.message); }
+};
+document.getElementById("clear").onclick = () => api("DELETE", "/api/events").then(() => msg("Cleared"), (e) => msg(e.message));
+document.getElementById("style").onchange = (e) => api("PATCH", "/api/display", { style: e.target.value }).catch((err) => msg(err.message));
+api("GET", "/api/display").then((d) => (document.getElementById("style").value = d.style), () => {});
+poll();
+</script>
+</body>
+</html>
