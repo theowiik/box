@@ -85,55 +85,78 @@ button.danger { color: var(--bad); }
 .savebar .msg { flex: 1; font-size: 13px; }
 .msg.bad { color: var(--bad); } .msg.ok { color: var(--ok); }
 details summary { cursor: pointer; color: var(--muted); font-size: 13px; }
+
+/* Home: the box, then its apps. */
+.hero { display: flex; gap: 18px; align-items: center; flex-wrap: wrap; margin-bottom: 22px; }
+.hero h1 { font-size: 22px; margin: 0 0 2px; }
+.apps { display: grid; gap: 12px; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); }
+.tile {
+  display: flex; flex-direction: column; align-items: flex-start; gap: 8px; text-align: left;
+  padding: 16px; border-radius: 16px; background: var(--card); border: 1px solid var(--line);
+  min-height: 140px; transition: transform .12s, box-shadow .12s;
+}
+.tile:hover { transform: translateY(-2px); box-shadow: 0 8px 24px rgba(0,0,0,.10); border-color: var(--line); }
+.tile .icon, .app-head .icon { width: 44px; height: 44px; border-radius: 12px; display: grid; place-items: center; font-size: 22px; flex: none; }
+.app-head .icon { width: 36px; height: 36px; border-radius: 10px; font-size: 18px; }
+.tile strong { font-size: 15px; }
+.tile .sub { font-size: 12.5px; color: var(--muted); line-height: 1.35; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.tile .badge { font-size: 11px; padding: 1px 7px; border-radius: 99px; border: 1px solid var(--line); color: var(--muted); margin-top: auto; }
+.tile .badge:empty { display: none; }
+.tile .badge.on { color: var(--ok); border-color: currentColor; }
+.i-msg { background: #e8f0ff; } .i-vis { background: #fff1d6; } .i-wx { background: #def4ff; }
+.i-feed { background: #ffe6dc; } .i-disp { background: #ece6ff; } .i-set { background: #e9e9e6; }
+@media (prefers-color-scheme: dark) {
+  .i-msg { background: #1c2a44; } .i-vis { background: #3a2d12; } .i-wx { background: #123344; }
+  .i-feed { background: #3d2118; } .i-disp { background: #2a2244; } .i-set { background: #2a2a28; }
+}
+.app-head { display: flex; align-items: center; gap: 12px; margin-bottom: 16px; }
+.app-head h2 { margin: 0; font-size: 19px; flex: 1; }
+.back { border: 0; background: none; padding: 6px 8px 6px 0; color: var(--accent); }
+[hidden] { display: none !important; }
+.visuals { display: grid; gap: 10px; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); }
+.visuals button { padding: 18px 10px; border-radius: 12px; text-transform: capitalize; }
 </style>
 </head>
 <body>
 <main>
-  <header>
-    <svg width="36" height="36" viewBox="0 0 16 16" aria-hidden="true"><rect width="16" height="16" rx="3" fill="#111"/><rect x="4" y="4" width="8" height="8" rx="1" fill="#FFD54F"/></svg>
-    <div>
-      <h1>Box essentials</h1>
-      <p>The weather and feeds your box shows when nothing else is on. It shows the time by itself.</p>
-    </div>
-  </header>
-
-  <section>
-    <h2><span class="dot" id="box-dot"></span><span class="grow">The box</span>
-      <span class="muted" id="box-url"></span></h2>
-    <div class="screen-wrap">
+  <div id="home">
+    <div class="hero">
       <div class="screen" id="screen"><div class="x">…</div></div>
-      <div class="facts" id="facts"><div class="muted">Looking for the box…</div></div>
-    </div>
-    <div class="row" style="margin-top:14px">
-      <div>
-        <label for="style">Style</label>
-        <select id="style"><option value="smooth">Smooth</option><option value="led">LED</option></select>
-      </div>
-      <div>
-        <label for="brightness">Brightness <span id="brightness-val"></span></label>
-        <input type="range" id="brightness" min="0.05" max="1" step="0.05" style="width:100%">
+      <div class="facts">
+        <h1>Box essentials</h1>
+        <div class="inline muted" style="margin-bottom:8px"><span class="dot" id="box-dot"></span><span id="box-url"></span></div>
+        <div id="facts"><div class="muted">Looking for the box…</div></div>
       </div>
     </div>
-    <details>
-      <summary>Send something now</summary>
-      <div class="row" style="margin-top:10px">
-        <div><label for="send-title">Title</label><input type="text" id="send-title" maxlength="80" placeholder="Hi"></div>
-        <div style="grid-column: span 2"><label for="send-text">Text</label><input type="text" id="send-text" maxlength="512" placeholder="hello"></div>
-      </div>
-      <div class="inline">
-        <button id="send">Send</button>
-        <select id="visual" style="width:auto"></select>
-        <button id="play">Play</button>
-        <span class="grow" style="flex:1"></span>
-        <button class="danger" id="clear">Clear the screen</button>
-      </div>
-      <p class="muted" id="send-msg"></p>
-    </details>
+    <div class="apps">
+      <button class="tile" data-open="message"><span class="icon i-msg">💬</span><strong>Message</strong><span class="sub">Put some text on the screen now.</span></button>
+      <button class="tile" data-open="visuals"><span class="icon i-vis">✨</span><strong>Visuals</strong><span class="sub" id="t-visuals">Play an animation.</span></button>
+      <button class="tile" data-open="weather"><span class="icon i-wx">🌤️</span><strong>Weather</strong><span class="sub" id="t-weather"></span><span class="badge" id="b-weather"></span></button>
+      <button class="tile" data-open="feeds"><span class="icon i-feed">📰</span><strong>Feeds</strong><span class="sub" id="t-feeds"></span><span class="badge" id="b-feeds"></span></button>
+      <button class="tile" data-open="display"><span class="icon i-disp">🔆</span><strong>Display</strong><span class="sub" id="t-display">Style and brightness.</span></button>
+      <button class="tile" data-open="settings"><span class="icon i-set">⚙️</span><strong>Settings</strong><span class="sub" id="t-settings">Where the box is.</span></button>
+    </div>
+  </div>
+
+  <section class="app" data-app="message" hidden>
+    <div class="app-head"><button class="back">‹ Apps</button><span class="icon i-msg">💬</span><h2>Message</h2></div>
+    <div class="row">
+      <div><label for="send-title">Title</label><input type="text" id="send-title" maxlength="80" placeholder="Hi"></div>
+      <div style="grid-column: span 2"><label for="send-text">Text</label><input type="text" id="send-text" maxlength="512" placeholder="hello"></div>
+    </div>
+    <button class="primary" id="send">Send to the box</button>
+    <p class="muted send-msg"></p>
   </section>
 
-  <section>
-    <h2><span class="grow">Weather</span>
-      <label class="switch"><input type="checkbox" id="w-enabled"> On</label></h2>
+  <section class="app" data-app="visuals" hidden>
+    <div class="app-head"><button class="back">‹ Apps</button><span class="icon i-vis">✨</span><h2>Visuals</h2></div>
+    <p class="muted" style="margin-top:0">Tap one to play it on the box.</p>
+    <div class="visuals" id="visuals"></div>
+    <p class="muted send-msg"></p>
+  </section>
+
+  <section class="app" data-app="weather" hidden>
+    <div class="app-head"><button class="back">‹ Apps</button><span class="icon i-wx">🌤️</span><h2>Weather</h2><label class="switch"><input type="checkbox" id="w-enabled"> On</label></div>
     <label for="place">Place</label>
     <input type="text" id="place" autocomplete="off" placeholder="Search for a city…">
     <ul class="places" id="places"></ul>
@@ -151,20 +174,36 @@ details summary { cursor: pointer; color: var(--muted); font-size: 13px; }
     <div class="report" id="r-weather"></div>
   </section>
 
-  <section>
-    <h2><span class="grow">Feeds</span><button class="link" id="add-feed">+ Add a feed</button></h2>
+  <section class="app" data-app="feeds" hidden>
+    <div class="app-head"><button class="back">‹ Apps</button><span class="icon i-feed">📰</span><h2>Feeds</h2><button class="link" id="add-feed">+ Add a feed</button></div>
     <p class="muted" style="margin-top:-6px">RSS or Atom. Something new shows its title, or plays a visual.</p>
     <div id="feeds"></div>
   </section>
 
-  <section>
-    <h2>Where the box is</h2>
-    <label for="box-url-input">Address</label>
+  <section class="app" data-app="display" hidden>
+    <div class="app-head"><button class="back">‹ Apps</button><span class="icon i-disp">🔆</span><h2>Display</h2></div>
+    <div class="row">
+      <div>
+        <label for="style">Style</label>
+        <select id="style"><option value="smooth">Smooth</option><option value="led">LED</option></select>
+      </div>
+      <div>
+        <label for="brightness">Brightness <span id="brightness-val"></span></label>
+        <input type="range" id="brightness" min="0.05" max="1" step="0.05" style="width:100%">
+      </div>
+    </div>
+    <button class="danger" id="clear">Clear the screen</button>
+    <p class="muted send-msg"></p>
+  </section>
+
+  <section class="app" data-app="settings" hidden>
+    <div class="app-head"><button class="back">‹ Apps</button><span class="icon i-set">⚙️</span><h2>Settings</h2></div>
+    <label for="box-url-input">Where the box is</label>
     <input type="url" id="box-url-input" placeholder="">
     <p class="muted">Leave empty to find it as box.local. If that does not work on your network, use the IP it shows at boot.</p>
   </section>
 
-  <div class="savebar">
+  <div class="savebar" hidden>
     <span class="msg" id="save-msg"></span>
     <button id="revert">Undo changes</button>
     <button class="primary" id="save">Save</button>
@@ -288,6 +327,8 @@ function changed(msg, cls) {
   m.textContent = msg || (dirty() ? "Unsaved changes." : "");
   $("save").disabled = !dirty();
   $("revert").disabled = !dirty();
+  document.querySelector(".savebar").hidden = !dirty() && !msg;
+  tiles();
 }
 
 $("w-enabled").onchange = (e) => { draft.weather.enabled = e.target.checked; changed(); };
@@ -348,6 +389,34 @@ $("place").onblur = () => setTimeout(() => {
   if (!$("places").contains(document.activeElement)) { $("places").replaceChildren(); $("place").value = draft.weather.place.name; }
 }, 200);
 
+// --- apps: a home grid, one view each (#weather etc.) ---------------------
+
+function route() {
+  const app = location.hash.slice(1);
+  const known = !!document.querySelector('.app[data-app="' + app + '"]');
+  $("home").hidden = known;
+  document.querySelectorAll(".app").forEach((el) => (el.hidden = !known || el.dataset.app !== app));
+  window.scrollTo(0, 0);
+}
+document.querySelectorAll("[data-open]").forEach((b) => (b.onclick = () => (location.hash = b.dataset.open)));
+document.querySelectorAll(".back").forEach((b) => (b.onclick = () => history.length > 1 && location.hash ? history.back() : (location.hash = "")));
+window.addEventListener("hashchange", route);
+route();
+
+// What each tile says: its state at a glance.
+let lastWeather = "";
+function tiles() {
+  if (!draft) return;
+  const w = draft.weather, on = draft.feeds.filter((f) => f.enabled).length;
+  $("t-weather").textContent = w.place.name + (lastWeather ? " · " + lastWeather : "");
+  $("b-weather").textContent = w.enabled ? "On" : "Off";
+  $("b-weather").className = "badge" + (w.enabled ? " on" : "");
+  $("t-feeds").textContent = draft.feeds.map((f) => f.title || f.name).filter(Boolean).join(", ") || "No feeds yet.";
+  $("b-feeds").textContent = draft.feeds.length ? on + " of " + draft.feeds.length + " on" : "";
+  $("b-feeds").className = "badge" + (on ? " on" : "");
+  $("t-settings").textContent = (draft.box_url || meta.default_box_url || "box.local").replace(/^https?:\/\//, "");
+}
+
 // --- the box ----------------------------------------------------------------
 
 let touching = false;   // do not move the slider under the pointer
@@ -388,8 +457,12 @@ async function refresh() {
       return d;
     }));
     $("style").value = st.style;
+    $("t-display").textContent = (st.style === "led" ? "LED" : "Smooth") + " · " + Math.round(st.brightness * 100) + "%";
     if (!touching) { $("brightness").value = st.brightness; $("brightness-val").textContent = Math.round(st.brightness * 100) + "%"; }
   }
+  const wr = o.sources.weather;
+  lastWeather = wr && wr.sent && wr.shown ? wr.shown.replace(/^[^:]*:\s*/, "") : "";
+  tiles();
   describeReport($("r-weather"), o.sources.weather, draft && draft.weather.enabled ? "Not checked yet." : "Off.");
   document.querySelectorAll(".feed").forEach((el) => {
     const f = draft.feeds.find((x) => x.name === el.dataset.name);
@@ -398,16 +471,15 @@ async function refresh() {
 }
 
 async function boxDo(method, path, body, ok) {
-  const m = $("send-msg");
-  try { await api(method, path, body); m.textContent = ok || ""; setTimeout(refresh, 400); }
-  catch (err) { m.textContent = err.message; }
+  const say = (t) => document.querySelectorAll(".send-msg").forEach((m) => (m.textContent = t));
+  try { await api(method, path, body); say(ok || ""); setTimeout(refresh, 400); }
+  catch (err) { say(err.message); }
 }
 
 $("style").onchange = (e) => boxDo("PATCH", "/api/box/display", { style: e.target.value });
 $("brightness").oninput = (e) => { touching = true; $("brightness-val").textContent = Math.round(e.target.value * 100) + "%"; };
 $("brightness").onchange = async (e) => { await boxDo("PATCH", "/api/box/display", { brightness: Number(e.target.value) }); touching = false; };
 $("send").onclick = () => boxDo("POST", "/api/box/send", { title: $("send-title").value, text: $("send-text").value }, "Sent.");
-$("play").onclick = () => boxDo("POST", "/api/box/send", { visual: $("visual").value }, "Playing.");
 $("clear").onclick = () => boxDo("POST", "/api/box/clear", {}, "Cleared.");
 
 (async () => {
@@ -415,7 +487,13 @@ $("clear").onclick = () => boxDo("POST", "/api/box/clear", {}, "Cleared.");
     const v = await api("GET", "/api/settings");
     meta = v;
     saved = settingsOf(v); draft = clone(saved);
-    $("visual").replaceChildren(...v.visuals.map((x) => new Option(x, x)));
+    $("visuals").replaceChildren(...v.visuals.map((x) => {
+      const b = document.createElement("button");
+      b.textContent = x;
+      b.onclick = () => boxDo("POST", "/api/box/send", { visual: x }, "Playing " + x + ".");
+      return b;
+    }));
+    $("t-visuals").textContent = v.visuals.join(", ") || "None yet.";
     render();
   } catch (err) {
     changed("Could not load the settings: " + err.message, "bad");
