@@ -139,6 +139,9 @@ func (b *Box) Settings(brightness *float64, style string) (Display, error) {
 	return d, err
 }
 
+// ClearAmbient empties the idle rotation; what is on screen stays.
+func (b *Box) ClearAmbient() error { return b.do(http.MethodDelete, "/api/ambient", nil, nil) }
+
 // Clear drops the queue and what is showing; with ambient, also the idle rotation.
 func (b *Box) Clear(ambient bool) error {
 	if err := b.do(http.MethodDelete, "/api/events", nil, nil); err != nil || !ambient {

@@ -6,6 +6,7 @@ package service
 import (
 	"context"
 	"log/slog"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -26,6 +27,7 @@ type Service struct {
 	reports    map[string]sources.Report
 	stop       context.CancelFunc
 	done       chan struct{}
+	idle       []string // the idle cards the running sources keep
 }
 
 func New(store *settings.Store, stateDir, token string) *Service {
@@ -77,6 +79,7 @@ func (s *Service) restart(ctx context.Context, set settings.Settings) {
 	// Stop the old sources without holding mu: they take it to report.
 	s.mu.Lock()
 	stop, done := s.stop, s.done
+	prev := s.idle
 	s.mu.Unlock()
 	if stop != nil {
 		stop()
@@ -88,6 +91,14 @@ func (s *Service) restart(ctx context.Context, set settings.Settings) {
 	if s.box == nil || s.box.URL != effectiveURL(set.BoxURL) {
 		s.box = client.New(set.BoxURL, s.Token)
 	}
+	// A card dropped from the rotation stays on the box until it is cleared;
+	// the sources post theirs again at once.
+	if prev != nil && !slices.Equal(prev, idleNames(set)) {
+		if err := s.box.ClearAmbient(); err != nil {
+			slog.Warn("could not reset the idle rotation", "err", err)
+		}
+	}
+	s.idle = idleNames(set)
 	srcs := Sources(set, s.StateDir)
 	s.reports = map[string]sources.Report{}
 	run, stop := context.WithCancel(ctx)
@@ -119,6 +130,18 @@ func Sources(set settings.Settings, stateDir string) []sources.Source {
 	if w := set.Weather; w.Enabled {
 		out = append(out, sources.NewWeather(w.Place, w.Fahrenheit, time.Duration(w.EveryMinutes)*time.Minute))
 	}
+	id := set.Idle
+	dwell := time.Duration(id.Seconds) * time.Second
+	if id.Clock {
+		zone, err := time.LoadLocation(id.Timezone)
+		if err != nil {
+			zone = time.Local
+		}
+		out = append(out, sources.NewClock(zone, dwell))
+	}
+	for _, v := range id.Visuals {
+		out = append(out, &sources.IdleVisual{Visual: v, Dwell: dwell})
+	}
 	for _, f := range set.Feeds {
 		if !f.Enabled {
 			continue
@@ -129,4 +152,13 @@ func Sources(set settings.Settings, stateDir string) []sources.Source {
 		}, stateDir))
 	}
 	return out
+}
+
+// idleNames are the idle cards the settings ask for, to tell when that changes.
+func idleNames(set settings.Settings) []string {
+	out := []string{}
+	if set.Idle.Clock {
+		out = append(out, "clock")
+	}
+	return append(out, set.Idle.Visuals...)
 }

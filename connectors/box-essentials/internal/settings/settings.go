@@ -14,6 +14,8 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"time"
+	_ "time/tzdata" // the clock's zone, in a distroless image
 
 	"github.com/theowiik/box/connectors/box-essentials/internal/client"
 	"github.com/theowiik/box/connectors/box-essentials/internal/sources"
@@ -25,6 +27,16 @@ type Settings struct {
 	BoxURL  string  `json:"box_url"`
 	Weather Weather `json:"weather"`
 	Feeds   []Feed  `json:"feeds"`
+	Idle    Idle    `json:"idle"`
+}
+
+// Idle is what the box rotates through when nothing else is on, besides
+// the weather: the time and some visuals, each for Seconds a turn.
+type Idle struct {
+	Clock    bool     `json:"clock"`
+	Timezone string   `json:"timezone"` // IANA, e.g. Europe/Stockholm; empty for the server's
+	Visuals  []string `json:"visuals"`
+	Seconds  int      `json:"seconds"`
 }
 
 type Weather struct {
@@ -55,6 +67,7 @@ func Default() Settings {
 			Name: "Stockholm", Region: "Stockholm", Country: "Sweden", Latitude: 59.3293, Longitude: 18.0686}},
 		Feeds: []Feed{{Enabled: true, Name: "essr", Title: "En Stor Stark Review",
 			URL: "https://enstorstarkreview.se/feed.xml", Show: "beer", EveryMinutes: 5}},
+		Idle: Idle{Clock: true, Timezone: "Europe/Stockholm", Visuals: []string{"rainbow", "life"}, Seconds: 12},
 	}
 }
 
@@ -84,7 +97,21 @@ func (s *Settings) Validate() error {
 		bad("the weather is checked at least a minute apart")
 	}
 
-	names := map[string]bool{"weather": true}
+	names := map[string]bool{"weather": true, "clock": true}
+	id := &s.Idle
+	id.Timezone = strings.TrimSpace(id.Timezone)
+	if _, err := time.LoadLocation(id.Timezone); err != nil {
+		bad("the clock's time zone is a name like Europe/Stockholm")
+	}
+	for _, v := range id.Visuals {
+		if _, ok := visuals.All[v]; !ok {
+			bad("the idle visuals are some of %s", strings.Join(visuals.Names(), ", "))
+			break
+		}
+	}
+	if id.Seconds < 3 || id.Seconds > 600 {
+		bad("each idle card shows for 3 to 600 seconds")
+	}
 	for i := range s.Feeds {
 		f := &s.Feeds[i]
 		f.Name, f.Title, f.URL = strings.TrimSpace(f.Name), strings.TrimSpace(f.Title), strings.TrimSpace(f.URL)
@@ -94,6 +121,8 @@ func (s *Settings) Validate() error {
 		}
 		if !feedName.MatchString(f.Name) {
 			bad("%s: the name is lowercase letters, digits and dashes", label)
+		} else if strings.HasPrefix(f.Name, "idle-") {
+			bad("%s: names starting idle- are for the idle visuals", label)
 		} else if names[f.Name] {
 			bad("%s: two sources are called that", label)
 		}
@@ -137,7 +166,8 @@ func Open(dir string) (*Store, error) {
 	if err != nil {
 		return nil, err
 	}
-	var s Settings
+	// Settings from before a field existed get its default.
+	s := Settings{Idle: Default().Idle}
 	if err := json.Unmarshal(data, &s); err != nil {
 		return nil, fmt.Errorf("%s: %w", st.path, err)
 	}
@@ -180,6 +210,10 @@ func (st *Store) Set(s Settings) (Settings, error) {
 
 func clone(s Settings) Settings {
 	s.Feeds = slices.Clone(s.Feeds)
+	s.Idle.Visuals = slices.Clone(s.Idle.Visuals)
+	if s.Idle.Visuals == nil {
+		s.Idle.Visuals = []string{}
+	}
 	if s.Feeds == nil {
 		s.Feeds = []Feed{}
 	}

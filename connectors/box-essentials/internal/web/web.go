@@ -66,7 +66,8 @@ func (h *handler) getSettings(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *handler) putSettings(w http.ResponseWriter, r *http.Request) {
-	var s settings.Settings
+	// A page that does not know a section keeps what is set.
+	s := settings.Settings{Idle: h.svc.Store.Get().Idle}
 	if !decode(w, r, &s) {
 		return
 	}

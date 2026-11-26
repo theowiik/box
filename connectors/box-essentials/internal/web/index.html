@@ -104,10 +104,10 @@ details summary { cursor: pointer; color: var(--muted); font-size: 13px; }
 .tile .badge:empty { display: none; }
 .tile .badge.on { color: var(--ok); border-color: currentColor; }
 .i-msg { background: #e8f0ff; } .i-vis { background: #fff1d6; } .i-wx { background: #def4ff; }
-.i-feed { background: #ffe6dc; } .i-disp { background: #ece6ff; } .i-set { background: #e9e9e6; }
+.i-feed { background: #ffe6dc; } .i-disp { background: #ece6ff; } .i-set { background: #e9e9e6; } .i-idle { background: #e0f5e9; }
 @media (prefers-color-scheme: dark) {
   .i-msg { background: #1c2a44; } .i-vis { background: #3a2d12; } .i-wx { background: #123344; }
-  .i-feed { background: #3d2118; } .i-disp { background: #2a2244; } .i-set { background: #2a2a28; }
+  .i-feed { background: #3d2118; } .i-disp { background: #2a2244; } .i-set { background: #2a2a28; } .i-idle { background: #16342a; }
 }
 .app-head { display: flex; align-items: center; gap: 12px; margin-bottom: 16px; }
 .app-head h2 { margin: 0; font-size: 19px; flex: 1; }
@@ -133,6 +133,7 @@ details summary { cursor: pointer; color: var(--muted); font-size: 13px; }
       <button class="tile" data-open="visuals"><span class="icon i-vis">✨</span><strong>Visuals</strong><span class="sub" id="t-visuals">Play an animation.</span></button>
       <button class="tile" data-open="weather"><span class="icon i-wx">🌤️</span><strong>Weather</strong><span class="sub" id="t-weather"></span><span class="badge" id="b-weather"></span></button>
       <button class="tile" data-open="feeds"><span class="icon i-feed">📰</span><strong>Feeds</strong><span class="sub" id="t-feeds"></span><span class="badge" id="b-feeds"></span></button>
+      <button class="tile" data-open="idle"><span class="icon i-idle">🔁</span><strong>Idle</strong><span class="sub" id="t-idle"></span><span class="badge" id="b-idle"></span></button>
       <button class="tile" data-open="display"><span class="icon i-disp">🔆</span><strong>Display</strong><span class="sub" id="t-display">Style and brightness.</span></button>
       <button class="tile" data-open="settings"><span class="icon i-set">⚙️</span><strong>Settings</strong><span class="sub" id="t-settings">Where the box is.</span></button>
     </div>
@@ -178,6 +179,18 @@ details summary { cursor: pointer; color: var(--muted); font-size: 13px; }
     <div class="app-head"><button class="back">‹ Apps</button><span class="icon i-feed">📰</span><h2>Feeds</h2><button class="link" id="add-feed">+ Add a feed</button></div>
     <p class="muted" style="margin-top:-6px">RSS or Atom. Something new shows its title, or plays a visual.</p>
     <div id="feeds"></div>
+  </section>
+
+  <section class="app" data-app="idle" hidden>
+    <div class="app-head"><button class="back">‹ Apps</button><span class="icon i-idle">🔁</span><h2>Idle</h2></div>
+    <p class="muted" style="margin-top:0">When nothing else is on, the box takes turns showing these, with the weather.</p>
+    <label class="switch" style="margin-bottom:12px"><input type="checkbox" id="i-clock"> The time and date</label>
+    <div class="row">
+      <div><label for="i-zone">Time zone</label><input type="text" id="i-zone" placeholder="Europe/Stockholm"></div>
+      <div><label for="i-seconds">Seconds each</label><input type="number" id="i-seconds" min="3" max="600" step="1"></div>
+    </div>
+    <label>Visuals</label>
+    <div class="inline" id="i-visuals"></div>
   </section>
 
   <section class="app" data-app="display" hidden>
@@ -248,7 +261,7 @@ async function api(method, path, body) {
 }
 
 const clone = (v) => JSON.parse(JSON.stringify(v));
-const settingsOf = (v) => ({ box_url: v.box_url, weather: v.weather, feeds: v.feeds });
+const settingsOf = (v) => ({ box_url: v.box_url, weather: v.weather, feeds: v.feeds, idle: v.idle });
 const dirty = () => JSON.stringify(draft) !== JSON.stringify(saved);
 
 function ago(iso) {
@@ -277,6 +290,18 @@ function render() {
   $("place-where").textContent = placeText(w.place) + "  ·  " + w.place.latitude.toFixed(2) + ", " + w.place.longitude.toFixed(2);
   $("units").value = w.fahrenheit ? "f" : "c";
   $("w-every").value = w.every_minutes;
+  const idle = draft.idle;
+  $("i-clock").checked = idle.clock;
+  $("i-zone").value = idle.timezone;
+  $("i-seconds").value = idle.seconds;
+  $("i-visuals").replaceChildren(...meta.visuals.map((v) => {
+    const l = document.createElement("label");
+    l.className = "switch";
+    const c = Object.assign(document.createElement("input"), { type: "checkbox", checked: idle.visuals.includes(v) });
+    c.onchange = () => { idle.visuals = meta.visuals.filter((x) => x === v ? c.checked : idle.visuals.includes(x)); changed(); };
+    l.append(c, " " + v);
+    return l;
+  }));
   $("box-url-input").value = draft.box_url;
   $("box-url-input").placeholder = meta.default_box_url;
 
@@ -334,6 +359,9 @@ function changed(msg, cls) {
 $("w-enabled").onchange = (e) => { draft.weather.enabled = e.target.checked; changed(); };
 $("units").onchange = (e) => { draft.weather.fahrenheit = e.target.value === "f"; changed(); };
 $("w-every").oninput = (e) => { draft.weather.every_minutes = Number(e.target.value); changed(); };
+$("i-clock").onchange = (e) => { draft.idle.clock = e.target.checked; changed(); };
+$("i-zone").oninput = (e) => { draft.idle.timezone = e.target.value; changed(); };
+$("i-seconds").oninput = (e) => { draft.idle.seconds = Number(e.target.value); changed(); };
 $("box-url-input").oninput = (e) => { draft.box_url = e.target.value; changed(); };
 $("add-feed").onclick = () => {
   draft.feeds.push({ enabled: true, name: "", title: "", url: "", show: "title", priority: "", every_minutes: 10, _named: false });
@@ -351,7 +379,7 @@ $("save").onclick = async () => {
     const v = await api("PUT", "/api/settings", body);
     saved = settingsOf(v); draft = clone(saved);
     render();
-    changed("Saved. The box gets the new weather and feeds now.", "ok");
+    changed("Saved. The box has the new settings now.", "ok");
     setTimeout(refresh, 2500);
   } catch (err) {
     changed(err.message, "bad");
@@ -414,6 +442,10 @@ function tiles() {
   $("t-feeds").textContent = draft.feeds.map((f) => f.title || f.name).filter(Boolean).join(", ") || "No feeds yet.";
   $("b-feeds").textContent = draft.feeds.length ? on + " of " + draft.feeds.length + " on" : "";
   $("b-feeds").className = "badge" + (on ? " on" : "");
+  const ic = (draft.idle.clock ? ["clock"] : []).concat(draft.idle.visuals);
+  $("t-idle").textContent = ic.length ? "Weather, " + ic.join(", ") : "Just the weather.";
+  $("b-idle").textContent = ic.length + (draft.weather.enabled ? 1 : 0) + " cards";
+  $("b-idle").className = "badge on";
   $("t-settings").textContent = (draft.box_url || meta.default_box_url || "box.local").replace(/^https?:\/\//, "");
 }
 
