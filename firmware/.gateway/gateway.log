@@ -1,0 +1,4 @@
+ESP-Iris project-498049b2-e06b-4592-8a51-78f74560af75 listening at http://127.0.0.1:45017
+Authentication: local=disabled, remote=required
+WARNING: default developer password 'espressif' is active
+State: /home/theo/git/box/firmware/.gateway/state

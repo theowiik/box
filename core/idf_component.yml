@@ -1,0 +1,3 @@
+description: The box's portable core - what to show and when, for any display
+dependencies:
+  espressif/cjson: "^1.7.18"

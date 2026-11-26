@@ -1,0 +1,54 @@
+menu "Box"
+
+config BOX_HOSTNAME
+    string "Hostname (the box answers at <hostname>.local)"
+    default "box"
+
+config BOX_HTTP_PORT
+    int "HTTP API port"
+    range 1 65535
+    default 80
+
+config BOX_TOKEN
+    string "Bearer token required on writes (empty: no auth)"
+    default ""
+    help
+        Set it in mosaico/sdkconfig.local.defaults (gitignored), then rebuild
+        from clean: an existing build keeps the value it was configured with.
+
+config BOX_STYLE
+    string "Style at boot: smooth or led"
+    default "smooth"
+    help
+        smooth draws text with a real font at the screen's resolution; led
+        draws everything as a grid of square LEDs. Events can pick their own,
+        and PATCH /api/display changes it until the next reboot.
+
+config BOX_LED_GRID
+    int "LEDs per side in the led style"
+    range 8 160
+    default 96
+    help
+        Each LED is 480 / grid pixels; a divisor of 480 (96 gives 5 px LEDs)
+        fills the screen.
+
+config BOX_TIMEZONE
+    string "Time zone for the idle clock (POSIX TZ)"
+    default "CET-1CEST,M3.5.0,M10.5.0/3"
+    help
+        Shown when nothing else is on the panel. The default is Central
+        European Time with daylight saving (Stockholm, Berlin, Paris).
+
+config BOX_NTP_SERVER
+    string "Network time server"
+    default "pool.ntp.org"
+
+config BOX_FPS
+    int "Frames per second"
+    range 1 60
+    default 25
+    help
+        The render loop's rate. It runs on FreeRTOS ticks, so pick a rate
+        whose period is a whole number of ticks (25 fps is 4 at 100 Hz).
+
+endmenu

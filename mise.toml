@@ -1,0 +1,104 @@
+# The whole repo from the top: `mise tasks` lists everything, `mise run <task>`
+# runs it. core/ decides what the screen shows; mosaico/ runs it on an
+# ESP-Mosaico; connectors/box-services sends it things and runs in Docker on a
+# server that stays on (compose.yaml).
+
+[tools]
+go = "1.26"
+
+[env]
+# Machine settings (see .env.example); a real environment variable wins.
+_.file = ".env"
+# box-services is pure Go: no C compiler needed.
+CGO_ENABLED = "0"
+
+# --- the box on an ESP-Mosaico (needs MOSAICO_WORKSPACE; install needs USB) --
+# MOSAICO_SHELL is a prefix that loads ESP-IDF, if your shell has not already.
+
+[tasks.firmware]
+description = "Build the ESP-Mosaico firmware"
+dir = "mosaico"
+run = "${MOSAICO_SHELL:-} idf.py -D IDF_TARGET=esp32s31 app"
+
+[tasks.install]
+description = "Build and install the firmware on the board over USB"
+run = "${MOSAICO_SHELL:-} python $MOSAICO_WORKSPACE/mosaico.py --workspace $MOSAICO_WORKSPACE iris system-update --project {{config_root}}/mosaico"
+
+[tasks.logs]
+description = "Follow the board's log"
+run = "${MOSAICO_SHELL:-} python $MOSAICO_WORKSPACE/mosaico.py --workspace $MOSAICO_WORKSPACE iris logs --project {{config_root}}/mosaico"
+
+[tasks.screenshot]
+description = "Save what the screen shows to box.png"
+run = "${MOSAICO_SHELL:-} python $MOSAICO_WORKSPACE/mosaico.py --workspace $MOSAICO_WORKSPACE iris screenshot {{config_root}}/box.png --project {{config_root}}/mosaico"
+
+# --- box-services: one-offs from any machine on the box's network --------------
+# Extra arguments go to box-services, e.g. `mise run send -- --title Hi hello`.
+
+[tasks.status]
+description = "What is on screen"
+dir = "connectors/box-services"
+run = "go run . status"
+
+[tasks.send]
+description = "Show some text: mise run send -- [--title T] TEXT"
+dir = "connectors/box-services"
+run = "go run . send"
+
+[tasks.demo]
+description = "Play a built-in visual: mise run demo -- beer (rainbow, life, gradient, beer)"
+dir = "connectors/box-services"
+run = "go run . visual"
+
+[tasks.gif]
+description = "Play a GIF: mise run gif -- party.gif"
+dir = "connectors/box-services"
+run = "go run . gif"
+
+[tasks.display]
+description = "What the box can do; change settings: mise run display -- --style led"
+dir = "connectors/box-services"
+run = "go run . display"
+
+[tasks.sources]
+description = "Run weather and feeds here, in the foreground (no Docker)"
+dir = "connectors/box-services"
+run = "go run . run"
+
+# --- the server: box-services in Docker ---------------------------------------
+
+[tasks.server]
+description = "Start box-services in Docker (on the server)"
+run = "docker compose up -d --build"
+
+[tasks.server-logs]
+description = "Follow box-services' log"
+run = "docker compose logs -f box-services"
+
+[tasks.server-down]
+description = "Stop box-services"
+run = "docker compose down"
+
+# --- checks -------------------------------------------------------------------
+
+[tasks.test-core]
+description = "The core, built and tested on this machine (ASan/UBSan)"
+run = "${MOSAICO_SHELL:-} sh -c 'cmake -S core -B core/build -DCMAKE_BUILD_TYPE=Debug >/dev/null && cmake --build core/build && ./core/build/box_core_tests'"
+
+[tasks.test-services]
+description = "box-services: gofmt, vet, tests"
+dir = "connectors/box-services"
+run = [
+    "test -z \"$(gofmt -l .)\" || { gofmt -l .; echo 'run: mise run format'; exit 1; }",
+    "go vet ./...",
+    "go test ./...",
+]
+
+[tasks.check]
+description = "Everything: the core's tests and box-services' checks"
+depends = ["test-core", "test-services"]
+
+[tasks.format]
+description = "Format box-services"
+dir = "connectors/box-services"
+run = "gofmt -w ."

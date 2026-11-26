@@ -5,16 +5,16 @@
 </p>
 
 An [ESP-Mosaico](https://mosaico.ai/en) on your desk that shows whatever you
-send it, drawn as an LED panel on its screen. The box itself only does
-the core: it receives events over Wi-Fi, decides what gets the panel, and draws
-it. Everything with an opinion about *content* — weather, feeds, GIFs — is a
+send it on its 480×480 screen: real text, images, or an LED-panel look. The box
+itself only does the core: it receives events over Wi-Fi, decides what gets the
+screen, and draws it. Everything with an opinion about *content* — weather, feeds, GIFs — is a
 connector on some other machine that POSTs to it.
 
 ```mermaid
 flowchart LR
     web(["🌐 The internet<br/>news and review feeds"])
 
-    subgraph server["🖥️ A server that stays on"]
+    subgraph server["🖥️ Always-on server · Docker Compose"]
         sources["☀️ Weather<br/>📰 Feeds<br/>🍺 Animations"]
     end
 
@@ -26,8 +26,8 @@ flowchart LR
         direction TB
         inbox["📥 <b>Inbox</b><br/>takes events over Wi-Fi"]
         queue["🚦 <b>Queue</b><br/>urgent first,<br/>one at a time"]
-        idle["🔁 <b>Idle loop</b><br/>weather and the like<br/>when nothing's queued"]
-        screen["✨ <b>Screen</b><br/>LED-style dots,<br/>text sized to fit"]
+        idle["🔁 <b>Idle loop</b><br/>ambient cards or local clock<br/>when nothing's queued"]
+        screen["✨ <b>Screen</b><br/>Square pixels,<br/>text sized to fit"]
         inbox --> queue --> screen
         inbox --> idle --> screen
     end
@@ -51,105 +51,108 @@ goes down, start them anywhere else: the box doesn't care who talks to it.
 
 ## Start
 
-The board needs the box firmware once (`make install`, see
+The board needs the box firmware once (`mise run install`, see
 [Firmware](#firmware)) and Wi-Fi, which it takes from the Mosaico's own Vibe
-Mode settings. At boot it shows its address on the panel and answers at
-**http://box.local**.
+Mode settings. At boot it shows its address and answers at **http://box.local**.
+When nothing else is on, it shows the time.
 
 ```bash
-make send TEXT="hello"   # some text, now
-make demo VISUAL=beer    # a built-in visual: rainbow, life, gradient, beer
-make gif GIF=party.gif   # a GIF
-make sources             # weather and feeds, until stopped
-make status              # what the panel shows
+mise run send -- --title Hi "hello"   # some text, now
+mise run demo -- beer                  # rainbow, life, gradient, beer
+mise run gif -- party.gif              # a GIF
+mise run status                        # what is on screen
+mise run server                        # weather and feeds, on the server
+mise tasks                             # everything else
 ```
 
-The connectors need [uv](https://docs.astral.sh/uv/) and nothing else. If
-`box.local` does not resolve on your network, put the box's IP in a `.env`
-(copy [.env.example](.env.example)): `BOX_URL=http://192.168.0.228`.
+Those run [`box-services`](connectors/box-services), one Go program. The tasks
+are in [`mise.toml`](mise.toml), which also pins Go: with
+[mise](https://mise.jdx.dev) installed, `mise install` gets it. The server
+needs only Docker. If `box.local` does not
+resolve on your network, put the box's IP in a `.env` (copy
+[.env.example](.env.example)): `BOX_URL=http://192.168.0.228`.
 
 ## Sending something
 
 ```bash
-curl -H 'Content-Type: application/json' \
-     -d '{"source":"discord","priority":"alert",
-          "scene":{"kind":"text","text":"@theo mentioned you"}}' \
-     http://box.local/api/events
+curl -H 'Content-Type: application/json' -d '{
+  "source": "discord", "priority": "alert",
+  "content": {"type": "text", "title": "Discord", "text": "@theo mentioned you"}
+}' http://box.local/api/events
 ```
 
-No colour in that payload: the box knows Discord is blurple. Connectors send
-*what happened*; the box owns how it looks.
+An event says *what* to show, never how many pixels: the box lays text out,
+scales images to fit and picks colours. No colour in that payload: the box
+knows Discord is blurple.
 
-| Priority | |
+| Content | Fields | |
+| --- | --- | --- |
+| `text` | `text`, `title`?, `color`?, `align`? (`center`, `left`) | Word-wrapped as large as it fits, never scrolled; `\n` breaks a line; with a title, the title takes the colour and the text is white |
+| `image` | `width`, `height`, `data`, `fps`? (12), `loop`? (true), `scaling`? (`pixelated`, `smooth`) | `data` is base64 RGB frames; any size, fitted to the screen |
+| `color` | `color` | The whole screen |
+| `clear` | | Black |
+
+| Event field | |
 | --- | --- |
-| `alarm` | Always takes the panel, interrupting even an alert |
-| `alert` | Takes it too — unless an instant event is already up, then it shows next |
-| `normal` | Queued behind any waiting alerts |
-| `ambient` | Joins the idle rotation, never interrupts |
+| `source` | Who it is from: picks the colour, and keeps one pending event per source |
+| `priority` | `alarm` always takes the screen · `alert` takes it unless another instant event is up, then shows next · `normal` (default) queues · `ambient` joins the idle rotation |
+| `duration` | Seconds on screen; leave it out for the priority's default |
+| `style` | `smooth` or `led` for this event; leave it out for the display's |
 
-Two instant tiers so a burst stays readable: pings line up behind each other
-instead of each shoving the last off screen. One pending event per source, so
-ten pings do not buy eighty seconds of panel time. An interrupted event comes
-back with the time it had left.
-
-Scenes are `text`, `frames` (your own RGB animation: `width`, `height`, `fps`,
-`loop`, base64 `data`; any size, scaled to the panel), `solid` and `blank`.
-Text never scrolls: it is word-wrapped and drawn as large as it fits, so a
-short word fills the panel and a paragraph gets small; `\n` forces a line
-break, and only text too long for even the smallest size is cut with `...`.
-`duration` is seconds on the panel; leave it out for the priority's default.
-
-Visuals are rendered by the sender, not the box: `box-sources visual beer` (or
-`make demo`) draws the pour at the size the box reports and sends it as frames.
+Bursts stay readable: pings line up instead of shoving each other off
+screen, and an interrupted event comes back with the time it had left.
 
 | Endpoint | |
 | --- | --- |
-| `POST /api/events` | Submit an event |
-| `DELETE /api/events` | Drop queued events |
-| `GET /api/display` | What's on the panel, its size, and measured `drawn_fps`/`shown_fps` |
-| `POST /api/display/clear` | Drop the queue and the idle rotation |
-| `POST /api/display/brightness` | `{"brightness": 0.0–1.0}`, until the next reboot |
+| `POST /api/events` | Show something |
+| `DELETE /api/events` | Drop the queue and what is showing |
+| `DELETE /api/ambient` | Empty the idle rotation |
+| `GET /api/status` | What is on screen, the queue, the rotation, measured frame rates |
+| `GET /api/display` | What this display can do: size, shape, content types, styles, limits |
+| `PATCH /api/display` | `{"brightness": 0.6, "style": "led"}`, until the next reboot |
 
-Errors come back as `{"detail": "..."}`: 422 for an invalid event, 503 when the
-queue, the rotation or animation memory is full.
+Errors are `{"detail": "..."}`: 422 for an invalid event, 503 when the queue,
+the rotation or image memory is full.
 
 ## What runs where
 
-**On the box: only the core.** Receiving, validating, the scheduler and
-drawing. Its state is memory: after a reboot the queue and the idle rotation
-are empty until connectors post again (the weather refreshes every minute).
+**On the box: only the core.** [`core/`](core) validates events, schedules
+them and draws them, in portable C (tested on any machine).
+[`mosaico/`](mosaico) adds the screen driver, Wi-Fi, HTTP and the clock. Its
+state is memory: after a reboot the queue and rotation are empty until the
+services post again (the weather refreshes every minute).
 
-**Everywhere else: content.** [`connectors/sources`](connectors/sources) is
-weather, RSS/Atom feeds and the visual generators, as one long-running service
-— a systemd user unit for whichever machine you leave on.
-[`connectors/gifcast`](connectors/gifcast) converts a GIF on your disk. Anything
-that can run `curl` is a connector; there is no SDK to keep in sync.
+**On a server that stays on:** [`box-services`](connectors/box-services) in
+Docker (`mise run server`, or `docker compose up -d --build`): the weather, RSS
+feeds, and visuals rendered to images. Compose uses the host network to reach
+`box.local` over mDNS and keeps feed history in a named volume. If that
+server goes down, run it anywhere else: the box does not care who talks to it.
+
+**Anywhere else:** the same `box-services` binary sends one-offs, or `curl`
+does. There is no SDK to keep in sync.
 
 ## Firmware
 
-[`firmware/`](firmware) is an ESP-IDF application for the ESP-Mosaico. It
+[`mosaico/`](mosaico) is an ESP-IDF application for the ESP-Mosaico. It
 builds against an [esp-mosaico-vibe](https://github.com/esp-mosaico/esp-mosaico-vibe)
 workspace (board support, ESP-Iris, install tooling), set up per its README.
 Point `MOSAICO_WORKSPACE` at it in `.env`, plug the board in over USB, and:
 
 ```bash
-make install      # build and install (keeps the Mosaico's Vibe Mode intact)
-make logs         # follow the board's log
-make screenshot   # save the panel to box.png
+mise run install      # build and install (keeps the Mosaico's Vibe Mode intact)
+mise run logs         # follow the board's log
+mise run screenshot   # save the screen to box.png
 ```
 
 Hold the AI button while powering on to get back to Vibe Mode. Build options
-(hostname, a bearer token for writes, panel size, frame rate) are in
-[firmware/README.md](firmware/README.md).
+(hostname, a bearer token for writes, the default style, the LED grid, time
+zone) are in [mosaico/README.md](mosaico/README.md).
 
 ## Development
 
 ```bash
-make check    # firmware core tests (on this machine, under ASan) + connectors
-make format
+mise run check    # the core's tests (ASan/UBSan); box-services' gofmt, vet, tests
+mise run format
 ```
 
-The firmware's core — event contract, scheduler, scenes, the LED look — is
-portable C, built and tested on this machine by `make check`, which also
-keeps it free of ESP-IDF. Only `box_device` touches ESP-IDF or hardware. See
-[AGENTS.md](AGENTS.md) for the layout.
+See [AGENTS.md](AGENTS.md) for the layout and the rules that keep it simple.

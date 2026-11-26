@@ -1,0 +1,24 @@
+# The part of the box that stays on: box-services (weather, feeds, visuals)
+# posting to the box over Wi-Fi. On the server:
+#
+#   docker compose up -d --build
+#
+# Settings come from .env (see .env.example); none are required.
+name: box
+services:
+  box-services:
+    build: connectors/box-services
+    restart: unless-stopped
+    # The host's network: box.local is found over mDNS, link-local multicast
+    # that Docker's own bridge network does not carry.
+    network_mode: host
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      BOX_STATE_DIR: /state
+    volumes:
+      - sources-state:/state
+
+volumes:
+  sources-state:

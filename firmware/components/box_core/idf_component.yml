@@ -1,3 +1,0 @@
-description: The box's portable core (no ESP-IDF APIs; tested on the host)
-dependencies:
-  espressif/cjson: "^1.7.18"
