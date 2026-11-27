@@ -188,7 +188,7 @@ static void test_api_json(void)
 
     json = box_api_display(&info);
     CHECK(json && strstr(json, "\"width\":480") && strstr(json, "\"shape\":\"square\""));
-    CHECK(strstr(json, "\"content\":[\"text\",\"image\",\"color\",\"clear\"]") &&
+    CHECK(strstr(json, "\"content\":[\"text\",\"image\",\"color\",\"clear\",\"glance\"]") &&
           strstr(json, "\"led_grid\":96") && strstr(json, "\"image_bytes\":4194304"));
     box_api_free(json);
 

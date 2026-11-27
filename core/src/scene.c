@@ -7,6 +7,7 @@
 #include <string.h>
 
 #include "box/text.h"
+#include "glance.h"
 
 /* In the led style a title's lines are drawn at this share of the colour. */
 #define LED_TITLE_DIM 0.55f
@@ -40,6 +41,9 @@ struct box_scene {
     float fps;
     bool loop;
     box_scaling_t scaling;
+    /* Glance: title is the date, text the time and weather. */
+    text_t time, temp, condition;
+    int sky, mood;
 };
 
 static atomic_size_t s_images_in_use;
@@ -215,6 +219,28 @@ box_scene_t *box_scene_new_clock(box_clock_fn now, void *ctx, box_rgb_t color)
     return scene;
 }
 
+box_scene_t *box_scene_new_glance(const char *date, const char *time, const char *temp,
+                                  const char *condition, int sky, int mood, box_rgb_t color)
+{
+    box_scene_t *scene = alloc_scene(BOX_CONTENT_GLANCE);
+    if (!scene) {
+        return NULL;
+    }
+    scene->color = color;
+    scene->sky = sky;
+    scene->mood = mood;
+    char summary[160];
+    snprintf(summary, sizeof(summary), "%s %s %s", time, temp, condition);
+    if (!text_set(&scene->title, date, strlen(date)) || !text_set(&scene->time, time, strlen(time)) ||
+        !text_set(&scene->temp, temp, strlen(temp)) ||
+        !text_set(&scene->condition, condition, strlen(condition)) ||
+        !text_set(&scene->text, summary, strlen(summary)) || !text_set(&scene->both, "", 0)) {
+        box_scene_release(scene);
+        return NULL;
+    }
+    return scene;
+}
+
 void box_scene_set_style(box_scene_t *scene, box_style_t style)
 {
     scene->style = style;
@@ -244,6 +270,9 @@ void box_scene_release(box_scene_t *scene)
     text_free(&scene->title);
     text_free(&scene->text);
     text_free(&scene->both);
+    text_free(&scene->time);
+    text_free(&scene->temp);
+    text_free(&scene->condition);
     free(scene->card);
     free(scene->bitmap);
     free(scene->data);
@@ -268,6 +297,8 @@ const char *box_scene_content_name(const box_scene_t *scene)
         return "image";
     case BOX_CONTENT_CLOCK:
         return "clock";
+    case BOX_CONTENT_GLANCE:
+        return "glance";
     case BOX_CONTENT_CLEAR:
     default:
         return "clear";
@@ -468,6 +499,23 @@ void box_scene_render(box_scene_t *scene, box_frame_t *frame, double t, box_styl
             draw_text_smooth(scene, frame);
         }
         break;
+    case BOX_CONTENT_GLANCE: {
+        const box_glance_t g = {
+            .date = {scene->title.cps, scene->title.count},
+            .time = {scene->time.cps, scene->time.count},
+            .temp = {scene->temp.cps, scene->temp.count},
+            .condition = {scene->condition.cps, scene->condition.count},
+            .sky = (box_glance_sky_t)scene->sky,
+            .mood = (box_glance_mood_t)scene->mood,
+            .color = scene->color,
+        };
+        if (style == BOX_STYLE_LED) {
+            box_glance_draw_led(frame, &g);
+        } else {
+            box_glance_draw_smooth(frame, &g);
+        }
+        break;
+    }
     case BOX_CONTENT_CLEAR:
     default:
         box_frame_clear(frame, BLACK);

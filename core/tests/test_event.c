@@ -155,8 +155,51 @@ static void test_code_built_text_event(void)
     box_event_clear(&ev);
 }
 
+static int lit_pixels(const box_frame_t *f)
+{
+    int n = 0;
+    for (size_t i = 0; i < box_frame_bytes(f); i += 3) {
+        n += f->pixels[i] || f->pixels[i + 1] || f->pixels[i + 2];
+    }
+    return n;
+}
+
+static void test_glance(void)
+{
+    box_event_t ev;
+    box_error_t err;
+    CHECK(parse("{\"content\":{\"type\":\"glance\",\"date\":\"Friday 27 November\",\"time\":\"15:46\","
+                "\"temp\":\"1\u00b0\",\"condition\":\"Partly cloudy\",\"sky\":\"partly\",\"mood\":\"good\"}}",
+                &ev, &err));
+    CHECK_STR(box_scene_content_name(ev.scene), "glance");
+    CHECK_STR(box_scene_title(ev.scene), "Friday 27 November");
+    CHECK_STR(box_scene_text(ev.scene), "15:46 1\xc2\xb0 Partly cloudy");
+    CHECK(box_scene_version(ev.scene, 0) == box_scene_version(ev.scene, 60)); /* still */
+    box_frame_t f;
+    CHECK(box_frame_init(&f, 240, 240));
+    for (int sky = 0; sky < 8; ++sky) {
+        for (int mood = 0; mood < 4; ++mood) {
+            box_scene_t *s = box_scene_new_glance("Friday", "15:46", "-12\xc2\xb0", "Rainy", sky, mood,
+                                                  (box_rgb_t){80, 160, 255});
+            box_scene_render(s, &f, 0, BOX_STYLE_SMOOTH);
+            CHECK(lit_pixels(&f) > 240 * 200); /* the sky fills it */
+            box_frame_t grid;
+            CHECK(box_frame_init(&grid, 48, 48));
+            box_scene_render(s, &grid, 0, BOX_STYLE_LED);
+            CHECK(lit_pixels(&grid) > 100);
+            box_frame_free(&grid);
+            box_scene_release(s);
+        }
+    }
+    box_frame_free(&f);
+    box_event_clear(&ev);
+    CHECK(refused("{\"content\":{\"type\":\"glance\"}}", 422));
+    CHECK(refused("{\"content\":{\"type\":\"glance\",\"time\":\"1\",\"sky\":\"lava\"}}", 422));
+}
+
 void run_event_tests(void)
 {
+    RUN(test_glance);
     RUN(test_text_defaults);
     RUN(test_title_colour_align_and_style);
     RUN(test_color_clear_and_image);

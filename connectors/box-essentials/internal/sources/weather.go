@@ -33,6 +33,7 @@ type Reading struct {
 	Temp      float64
 	Condition string
 	Color     string
+	Sky       string // for the glance: sun, moon, partly, cloud, fog, rain, snow, storm
 }
 
 // Weather is the current weather at a place, as an ambient card in the idle
@@ -80,7 +81,7 @@ func (w *Weather) Get(ctx context.Context) (Reading, error) {
 		return Reading{}, fmt.Errorf("the forecast had no current weather")
 	}
 	label, color := Condition(*out.Current.Code, out.Current.IsDay == 1)
-	return Reading{Temp: *out.Current.Temp, Condition: label, Color: color}, nil
+	return Reading{Temp: *out.Current.Temp, Condition: label, Color: color, Sky: Sky(*out.Current.Code, out.Current.IsDay == 1)}, nil
 }
 
 func (w *Weather) Poll(ctx context.Context) (*client.Event, error) {
@@ -160,4 +161,28 @@ func getJSON(ctx context.Context, h *http.Client, u string, out any) error {
 		return fmt.Errorf("%s returned %d", req.URL.Host, resp.StatusCode)
 	}
 	return json.NewDecoder(resp.Body).Decode(out)
+}
+
+// Sky is the glance's picture of a WMO weather code.
+func Sky(code int, day bool) string {
+	switch {
+	case code == 0 || code == 1:
+		if day {
+			return "sun"
+		}
+		return "moon"
+	case code == 2:
+		return "partly"
+	case code == 3:
+		return "cloud"
+	case code == 45 || code == 48:
+		return "fog"
+	case code >= 51 && code <= 67, code >= 80 && code <= 82:
+		return "rain"
+	case code >= 71 && code <= 77, code == 85 || code == 86:
+		return "snow"
+	case code >= 95:
+		return "storm"
+	}
+	return "cloud"
 }

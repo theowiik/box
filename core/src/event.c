@@ -9,6 +9,7 @@
 #include "base64.h"
 #include "box/text.h"
 #include "cJSON.h"
+#include "glance.h"
 
 /* Per-source colours. A connector that sends no colour gets its brand here. */
 static const struct {
@@ -318,6 +319,33 @@ static box_scene_t *parse_image(const cJSON *c, box_error_t *err)
     return scene ? scene : out_of_memory(err);
 }
 
+static box_scene_t *parse_glance(const cJSON *c, box_rgb_t fallback, box_rgb_t *color,
+                                 box_error_t *err)
+{
+    const char *date, *time, *temp, *condition;
+    if (!optional_string(c, "date", 40, &date, err) || !optional_string(c, "time", 8, &time, err) ||
+        !optional_string(c, "temp", 10, &temp, err) ||
+        !optional_string(c, "condition", 32, &condition, err)) {
+        return NULL;
+    }
+    if (!*time) {
+        fail(err, 422, "content.time: required, like 14:05");
+        return NULL;
+    }
+    int sky = BOX_SKY_CLOUD, mood = BOX_MOOD_GOOD;
+    bool has_color;
+    if (!optional_choice(c, "sky", BOX_GLANCE_SKIES, &sky, err) ||
+        !optional_choice(c, "mood", BOX_GLANCE_MOODS, &mood, err) ||
+        !optional_color(c, "color", color, &has_color, err)) {
+        return NULL;
+    }
+    if (!has_color) {
+        *color = fallback;
+    }
+    box_scene_t *scene = box_scene_new_glance(date, time, temp, condition, sky, mood, *color);
+    return scene ? scene : out_of_memory(err);
+}
+
 static box_scene_t *parse_content(const cJSON *c, box_rgb_t fallback, box_rgb_t *color,
                                   box_error_t *err)
 {
@@ -337,11 +365,14 @@ static box_scene_t *parse_content(const cJSON *c, box_rgb_t fallback, box_rgb_t 
     if (strcmp(name, "color") == 0) {
         return parse_color(c, color, err);
     }
+    if (strcmp(name, "glance") == 0) {
+        return parse_glance(c, fallback, color, err);
+    }
     if (strcmp(name, "clear") == 0) {
         box_scene_t *scene = box_scene_new_clear();
         return scene ? scene : out_of_memory(err);
     }
-    fail(err, 422, "content.type: one of text, image, color, clear");
+    fail(err, 422, "content.type: one of text, image, color, clear, glance");
     return NULL;
 }
 

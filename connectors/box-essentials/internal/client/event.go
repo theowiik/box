@@ -15,7 +15,7 @@ type Event struct {
 	Visual string `json:"-"`
 }
 
-// Content is one of: text, image, color, clear.
+// Content is one of: text, image, color, clear, glance.
 type Content struct {
 	Type string `json:"type"`
 
@@ -25,6 +25,14 @@ type Content struct {
 	Align string `json:"align,omitempty"` // center or left
 	// text and color
 	Color string `json:"color,omitempty"` // #RRGGBB; empty lets the box pick
+
+	// glance: the time, the weather and a smiley; Color tints it
+	Date      string `json:"date,omitempty"`
+	Time      string `json:"time,omitempty"`
+	Temp      string `json:"temp,omitempty"`
+	Condition string `json:"condition,omitempty"`
+	Sky       string `json:"sky,omitempty"`  // sun, moon, partly, cloud, fog, rain, snow, storm
+	Mood      string `json:"mood,omitempty"` // happy, good, meh, sad
 
 	// image: Data is width*height*3 RGB bytes per frame (base64 in JSON)
 	Width   int     `json:"width,omitempty"`

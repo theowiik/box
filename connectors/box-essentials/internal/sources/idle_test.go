@@ -42,7 +42,7 @@ func TestGlanceShowsTimeWeatherAndSmiley(t *testing.T) {
 	g := NewGlance(NewWeather(Place{Name: "Stockholm"}, false, 10*time.Minute), zone, 12*time.Second)
 	g.Now = func() time.Time { return now }
 	e, err := g.Poll(context.Background())
-	if err != nil || e == nil || e.Content.Text != "14:04\n3° Sunny  :D" || e.Content.Title != "Thursday 26 November" || e.Content.Color != "#FFD54F" {
+	if err != nil || e == nil || e.Content.Type != "glance" || e.Content.Time != "14:04" || e.Content.Temp != "3°" || e.Content.Sky != "sun" || e.Content.Mood != "happy" || e.Content.Date != "Thursday 26 November" || e.Content.Color != "#FFD54F" {
 		t.Fatalf("got %+v, %v", e, err)
 	}
 	if e, _ := g.Poll(context.Background()); e != nil {

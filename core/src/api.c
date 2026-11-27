@@ -63,7 +63,7 @@ char *box_api_status(const box_panel_state_t *state, const box_api_info_t *info)
 char *box_api_display(const box_api_info_t *info)
 {
     static const char *const STYLES[] = {"smooth", "led"};
-    static const char *const CONTENT[] = {"text", "image", "color", "clear"};
+    static const char *const CONTENT[] = {"text", "image", "color", "clear", "glance"};
     cJSON *doc = cJSON_CreateObject();
     if (!doc) {
         return NULL;
@@ -71,7 +71,7 @@ char *box_api_display(const box_api_info_t *info)
     cJSON_AddNumberToObject(doc, "width", info->width);
     cJSON_AddNumberToObject(doc, "height", info->height);
     cJSON_AddStringToObject(doc, "shape", info->shape);
-    cJSON_AddItemToObject(doc, "content", cJSON_CreateStringArray(CONTENT, 4));
+    cJSON_AddItemToObject(doc, "content", cJSON_CreateStringArray(CONTENT, 5));
     cJSON_AddItemToObject(doc, "styles", cJSON_CreateStringArray(STYLES, 2));
     cJSON_AddStringToObject(doc, "style", info->style);
     cJSON_AddNumberToObject(doc, "led_grid", info->grid);

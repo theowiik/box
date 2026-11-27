@@ -44,37 +44,33 @@ func (g *Glance) Poll(ctx context.Context) (*client.Event, error) {
 			g.reading, g.have = r, true
 		}
 	}
-	text := now.Format("15:04")
-	color := ""
+	c := client.Content{Type: "glance", Date: now.Format("Monday 2 January"), Time: now.Format("15:04"), Mood: "good"}
 	if g.have {
-		text += fmt.Sprintf("\n%d° %s  %s", int(math.Round(g.reading.Temp)), g.reading.Condition, Smiley(g.reading.Condition))
-		color = g.reading.Color
-	} else {
-		text += "\n:)"
+		r := g.reading
+		c.Temp = fmt.Sprintf("%d°", int(math.Round(r.Temp)))
+		c.Condition, c.Sky, c.Color, c.Mood = r.Condition, r.Sky, r.Color, Mood(r.Condition)
 	}
-	if text == g.last && now.Sub(g.sent) < 10*time.Minute {
+	key := fmt.Sprint(c)
+	if key == g.last && now.Sub(g.sent) < 10*time.Minute {
 		return nil, werr
 	}
-	g.last, g.sent = text, now
-	e := client.Text(g.Name(), now.Format("Monday 2 January"), text)
-	e.Priority = "ambient"
-	e.Duration = g.Dwell.Seconds()
-	e.Content.Color = color
+	g.last, g.sent = key, now
+	e := client.Event{Source: g.Name(), Priority: "ambient", Duration: g.Dwell.Seconds(), Content: c}
 	if werr != nil {
 		slog.Warn("glance: no weather this time", "err", werr)
 	}
 	return &e, nil
 }
 
-// Smiley is how the weather feels, in characters every box font has.
-func Smiley(condition string) string {
+// Mood is how the weather feels, for the glance's smiley.
+func Mood(condition string) string {
 	switch condition {
 	case "Sunny", "Clear":
-		return ":D"
+		return "happy"
 	case "Mostly clear", "Partly cloudy", "Snow":
-		return ":)"
+		return "good"
 	case "Rainy", "Drizzle", "Storm":
-		return ":("
+		return "sad"
 	}
-	return ":|"
+	return "meh"
 }

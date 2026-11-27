@@ -40,6 +40,7 @@ typedef enum {
     BOX_CONTENT_TEXT,
     BOX_CONTENT_IMAGE,
     BOX_CONTENT_CLOCK,
+    BOX_CONTENT_GLANCE,
 } box_content_t;
 
 /** The local time for a clock. False while it is not known yet. */
@@ -62,6 +63,11 @@ box_scene_t *box_scene_new_image(uint8_t *data, size_t size, int width, int heig
 /** HH:MM, sized like any text; empty while `now` cannot tell the time. */
 box_scene_t *box_scene_new_clock(box_clock_fn now, void *ctx, box_rgb_t color);
 
+/** The time, the weather and a smiley on one screen. Copies the UTF-8.
+ *  `sky` and `mood` index the names in event.h (BOX_GLANCE_SKIES/MOODS). */
+box_scene_t *box_scene_new_glance(const char *date, const char *time, const char *temp,
+                                  const char *condition, int sky, int mood, box_rgb_t color);
+
 /** Draw this scene in a fixed style rather than the display's. Only before
  *  the scene is shared. */
 void box_scene_set_style(box_scene_t *scene, box_style_t style);
@@ -71,11 +77,12 @@ box_scene_t *box_scene_retain(box_scene_t *scene);
 void box_scene_release(box_scene_t *scene);
 
 box_content_t box_scene_content(const box_scene_t *scene);
-/** "clear", "color", "text", "image" or "clock". */
+/** "clear", "color", "text", "image", "clock" or "glance". */
 const char *box_scene_content_name(const box_scene_t *scene);
-/** The title of a text scene, else "". */
+/** The title of a text scene (a glance's date), else "". */
 const char *box_scene_title(const box_scene_t *scene);
-/** The text of a text scene, or the time a clock last showed; else "". */
+/** The text of a text scene, the time a clock last showed or a glance's
+ *  time and weather; else "". */
 const char *box_scene_text(const box_scene_t *scene);
 /** The colour of a color, text or clock scene; black for the others. */
 box_rgb_t box_scene_color(const box_scene_t *scene);
