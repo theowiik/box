@@ -185,6 +185,7 @@ details summary { cursor: pointer; color: var(--muted); font-size: 13px; }
     <div class="app-head"><button class="back">‹ Apps</button><span class="icon i-idle">🔁</span><h2>Idle</h2></div>
     <p class="muted" style="margin-top:0">When nothing else is on, the box takes turns showing these, with the weather.</p>
     <label class="switch" style="margin-bottom:12px"><input type="checkbox" id="i-clock"> The time and date</label>
+    <label class="switch" style="margin-bottom:12px"><input type="checkbox" id="i-glance"> At a glance: the time, the weather and a smiley</label>
     <div class="row">
       <div><label for="i-zone">Time zone</label><input type="text" id="i-zone" placeholder="Europe/Stockholm"></div>
       <div><label for="i-seconds">Seconds each</label><input type="number" id="i-seconds" min="3" max="600" step="1"></div>
@@ -292,6 +293,7 @@ function render() {
   $("w-every").value = w.every_minutes;
   const idle = draft.idle;
   $("i-clock").checked = idle.clock;
+  $("i-glance").checked = idle.glance;
   $("i-zone").value = idle.timezone;
   $("i-seconds").value = idle.seconds;
   $("i-visuals").replaceChildren(...meta.visuals.map((v) => {
@@ -360,6 +362,7 @@ $("w-enabled").onchange = (e) => { draft.weather.enabled = e.target.checked; cha
 $("units").onchange = (e) => { draft.weather.fahrenheit = e.target.value === "f"; changed(); };
 $("w-every").oninput = (e) => { draft.weather.every_minutes = Number(e.target.value); changed(); };
 $("i-clock").onchange = (e) => { draft.idle.clock = e.target.checked; changed(); };
+$("i-glance").onchange = (e) => { draft.idle.glance = e.target.checked; changed(); };
 $("i-zone").oninput = (e) => { draft.idle.timezone = e.target.value; changed(); };
 $("i-seconds").oninput = (e) => { draft.idle.seconds = Number(e.target.value); changed(); };
 $("box-url-input").oninput = (e) => { draft.box_url = e.target.value; changed(); };
@@ -442,7 +445,7 @@ function tiles() {
   $("t-feeds").textContent = draft.feeds.map((f) => f.title || f.name).filter(Boolean).join(", ") || "No feeds yet.";
   $("b-feeds").textContent = draft.feeds.length ? on + " of " + draft.feeds.length + " on" : "";
   $("b-feeds").className = "badge" + (on ? " on" : "");
-  const ic = (draft.idle.clock ? ["clock"] : []).concat(draft.idle.visuals);
+  const ic = (draft.idle.clock ? ["clock"] : []).concat(draft.idle.glance ? ["glance"] : []).concat(draft.idle.visuals);
   $("t-idle").textContent = ic.length ? "Weather, " + ic.join(", ") : "Just the weather.";
   $("b-idle").textContent = ic.length + (draft.weather.enabled ? 1 : 0) + " cards";
   $("b-idle").className = "badge on";

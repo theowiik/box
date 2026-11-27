@@ -69,7 +69,8 @@ func TestSettingsPage(t *testing.T) {
 	dir := t.TempDir()
 	store, _ := settings.Open(dir)
 	s := store.Get()
-	s.Feeds = nil // no network for feeds here
+	s.Feeds = nil                                  // no network for feeds here
+	s.Weather.Enabled, s.Idle.Glance = true, false // this test follows the weather card
 	store.Set(s)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

@@ -139,6 +139,14 @@ func Sources(set settings.Settings, stateDir string) []sources.Source {
 		}
 		out = append(out, sources.NewClock(zone, dwell))
 	}
+	if id.Glance {
+		zone, err := time.LoadLocation(id.Timezone)
+		if err != nil {
+			zone = time.Local
+		}
+		w := set.Weather
+		out = append(out, sources.NewGlance(sources.NewWeather(w.Place, w.Fahrenheit, time.Duration(w.EveryMinutes)*time.Minute), zone, dwell))
+	}
 	for _, v := range id.Visuals {
 		out = append(out, &sources.IdleVisual{Visual: v, Dwell: dwell})
 	}
@@ -159,6 +167,9 @@ func idleNames(set settings.Settings) []string {
 	out := []string{}
 	if set.Idle.Clock {
 		out = append(out, "clock")
+	}
+	if set.Idle.Glance {
+		out = append(out, "glance")
 	}
 	return append(out, set.Idle.Visuals...)
 }

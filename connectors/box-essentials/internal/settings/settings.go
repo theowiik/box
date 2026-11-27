@@ -34,6 +34,7 @@ type Settings struct {
 // the weather: the time and some visuals, each for Seconds a turn.
 type Idle struct {
 	Clock    bool     `json:"clock"`
+	Glance   bool     `json:"glance"`   // the time, the weather and a smiley on one card
 	Timezone string   `json:"timezone"` // IANA, e.g. Europe/Stockholm; empty for the server's
 	Visuals  []string `json:"visuals"`
 	Seconds  int      `json:"seconds"`
@@ -63,11 +64,11 @@ type Feed struct {
 // Review pouring a pint for each new bar review.
 func Default() Settings {
 	return Settings{
-		Weather: Weather{Enabled: true, EveryMinutes: 10, Place: sources.Place{
+		Weather: Weather{Enabled: false, EveryMinutes: 10, Place: sources.Place{
 			Name: "Stockholm", Region: "Stockholm", Country: "Sweden", Latitude: 59.3293, Longitude: 18.0686}},
 		Feeds: []Feed{{Enabled: true, Name: "essr", Title: "En Stor Stark Review",
 			URL: "https://enstorstarkreview.se/feed.xml", Show: "beer", EveryMinutes: 5}},
-		Idle: Idle{Clock: true, Timezone: "Europe/Stockholm", Visuals: []string{"rainbow", "life"}, Seconds: 12},
+		Idle: Idle{Glance: true, Timezone: "Europe/Stockholm", Visuals: []string{}, Seconds: 12},
 	}
 }
 
@@ -97,7 +98,7 @@ func (s *Settings) Validate() error {
 		bad("the weather is checked at least a minute apart")
 	}
 
-	names := map[string]bool{"weather": true, "clock": true}
+	names := map[string]bool{"weather": true, "clock": true, "glance": true}
 	id := &s.Idle
 	id.Timezone = strings.TrimSpace(id.Timezone)
 	if _, err := time.LoadLocation(id.Timezone); err != nil {
