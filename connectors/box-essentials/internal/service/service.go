@@ -165,6 +165,9 @@ func Sources(set settings.Settings, stateDir string) []sources.Source {
 // idleNames are the idle cards the settings ask for, to tell when that changes.
 func idleNames(set settings.Settings) []string {
 	out := []string{}
+	if set.Weather.Enabled {
+		out = append(out, "weather")
+	}
 	if set.Idle.Clock {
 		out = append(out, "clock")
 	}
