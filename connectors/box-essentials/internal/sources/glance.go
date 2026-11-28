@@ -12,7 +12,7 @@ import (
 
 // Glance is one ambient card with everything at a glance: the time, the
 // weather and a little smiley that follows the weather. It posts when the
-// minute changes; the weather is asked for every Weather.Every.
+// weather or the day changes; the weather is asked for every Weather.Every.
 type Glance struct {
 	Weather *Weather
 	Zone    *time.Location
@@ -50,7 +50,9 @@ func (g *Glance) Poll(ctx context.Context) (*client.Event, error) {
 		c.Temp = fmt.Sprintf("%d°", int(math.Round(r.Temp)))
 		c.Condition, c.Sky, c.Color, c.Mood = r.Condition, r.Sky, r.Color, Mood(r.Condition)
 	}
-	key := fmt.Sprint(c)
+	// The box keeps the time itself (the dots move when the minute turns), so
+	// a new minute is no reason to post: a new event would restart the glance.
+	key := fmt.Sprint(c.Date, c.Temp, c.Condition, c.Sky, c.Mood, c.Color)
 	if key == g.last && now.Sub(g.sent) < 10*time.Minute {
 		return nil, werr
 	}

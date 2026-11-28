@@ -115,6 +115,7 @@ esp_err_t box_runtime_start(float brightness)
     /* When nothing is queued and no ambient card is up, show the time. */
     setenv("TZ", CONFIG_BOX_TIMEZONE, 1);
     tzset();
+    box_scene_set_clock(local_time, NULL); /* glances keep this time too */
     box_scene_t *clock = box_scene_new_clock(local_time, NULL, CLOCK_COLOR);
     ESP_RETURN_ON_FALSE(clock, ESP_ERR_NO_MEM, TAG, "clock");
     box_set_idle(s.box, clock, now_s());

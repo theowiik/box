@@ -44,6 +44,7 @@ struct box_scene {
     /* Glance: title is the date, text the time and weather. */
     text_t time, temp, condition;
     int sky, mood;
+    box_glance_anim_t *anim;
 };
 
 static atomic_size_t s_images_in_use;
@@ -234,7 +235,8 @@ box_scene_t *box_scene_new_glance(const char *date, const char *time, const char
     if (!text_set(&scene->title, date, strlen(date)) || !text_set(&scene->time, time, strlen(time)) ||
         !text_set(&scene->temp, temp, strlen(temp)) ||
         !text_set(&scene->condition, condition, strlen(condition)) ||
-        !text_set(&scene->text, summary, strlen(summary)) || !text_set(&scene->both, "", 0)) {
+        !text_set(&scene->text, summary, strlen(summary)) || !text_set(&scene->both, "", 0) ||
+        !(scene->anim = box_glance_anim_new())) {
         box_scene_release(scene);
         return NULL;
     }
@@ -273,6 +275,7 @@ void box_scene_release(box_scene_t *scene)
     text_free(&scene->time);
     text_free(&scene->temp);
     text_free(&scene->condition);
+    box_glance_anim_free(scene->anim);
     free(scene->card);
     free(scene->bitmap);
     free(scene->data);
@@ -348,9 +351,35 @@ static int update_clock(box_scene_t *scene)
     return stamp;
 }
 
+static box_clock_fn s_clock;
+static void *s_clock_ctx;
+
+void box_scene_set_clock(box_clock_fn now, void *ctx)
+{
+    s_clock = now;
+    s_clock_ctx = ctx;
+}
+
+/* A glance keeps the box's time when it knows it, else the sender's. */
+static uint64_t update_glance(box_scene_t *scene, double t)
+{
+    int hour, minute;
+    uint32_t now[5];
+    if (s_clock && s_clock(s_clock_ctx, &hour, &minute) && hour >= 0 && hour < 24 &&
+        minute >= 0 && minute < 60) {
+        const uint32_t digits[5] = {'0' + hour / 10, '0' + hour % 10, ':', '0' + minute / 10,
+                                    '0' + minute % 10};
+        memcpy(now, digits, sizeof(now));
+        return box_glance_anim_version(scene->anim, now, 5, t);
+    }
+    return box_glance_anim_version(scene->anim, scene->time.cps, scene->time.count, t);
+}
+
 uint64_t box_scene_version(box_scene_t *scene, double t)
 {
     switch (scene->content) {
+    case BOX_CONTENT_GLANCE:
+        return update_glance(scene, t);
     case BOX_CONTENT_IMAGE:
         return image_index(scene, t);
     case BOX_CONTENT_CLOCK:
@@ -500,6 +529,7 @@ void box_scene_render(box_scene_t *scene, box_frame_t *frame, double t, box_styl
         }
         break;
     case BOX_CONTENT_GLANCE: {
+        update_glance(scene, t);
         const box_glance_t g = {
             .date = {scene->title.cps, scene->title.count},
             .time = {scene->time.cps, scene->time.count},
@@ -510,9 +540,9 @@ void box_scene_render(box_scene_t *scene, box_frame_t *frame, double t, box_styl
             .color = scene->color,
         };
         if (style == BOX_STYLE_LED) {
-            box_glance_draw_led(frame, &g);
+            box_glance_draw_led(frame, &g, scene->anim, t);
         } else {
-            box_glance_draw_smooth(frame, &g);
+            box_glance_draw_smooth(frame, &g, scene->anim, t);
         }
         break;
     }

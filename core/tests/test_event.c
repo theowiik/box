@@ -164,6 +164,38 @@ static int lit_pixels(const box_frame_t *f)
     return n;
 }
 
+static int s_minute = 46;
+static bool test_clock(void *ctx, int *hour, int *minute)
+{
+    *hour = 15;
+    *minute = s_minute;
+    return true;
+}
+
+static void test_glance_dots_move_then_rest(void)
+{
+    box_scene_set_clock(test_clock, NULL);
+    box_scene_t *s = box_scene_new_glance("Friday", "", "1\xc2\xb0", "Clear", 0, 0, (box_rgb_t){0, 0, 0});
+    /* Find a still moment: between the smiley's blinks and looks. */
+    double still = -1;
+    for (double t = 0.1; t < 20 && still < 0; t += 0.05) {
+        if (box_scene_version(s, t) == box_scene_version(s, t + 0.2)) {
+            still = t;
+        }
+    }
+    CHECK(still >= 0); /* a resting glance costs nothing */
+    s_minute = 47;
+    const uint64_t a = box_scene_version(s, still), b = box_scene_version(s, still + 0.1);
+    CHECK(a != b); /* the dots fly */
+    box_frame_t f;
+    CHECK(box_frame_init(&f, 240, 240));
+    box_scene_render(s, &f, still + 0.3, BOX_STYLE_SMOOTH);
+    CHECK(lit_pixels(&f) > 500);
+    box_frame_free(&f);
+    box_scene_set_clock(NULL, NULL);
+    box_scene_release(s);
+}
+
 static void test_glance(void)
 {
     box_event_t ev;
@@ -174,7 +206,6 @@ static void test_glance(void)
     CHECK_STR(box_scene_content_name(ev.scene), "glance");
     CHECK_STR(box_scene_title(ev.scene), "Friday 27 November");
     CHECK_STR(box_scene_text(ev.scene), "15:46 1\xc2\xb0 Partly cloudy");
-    CHECK(box_scene_version(ev.scene, 0) == box_scene_version(ev.scene, 60)); /* still */
     box_frame_t f;
     CHECK(box_frame_init(&f, 240, 240));
     for (int sky = 0; sky < 8; ++sky) {
@@ -182,7 +213,7 @@ static void test_glance(void)
             box_scene_t *s = box_scene_new_glance("Friday", "15:46", "-12\xc2\xb0", "Rainy", sky, mood,
                                                   (box_rgb_t){80, 160, 255});
             box_scene_render(s, &f, 0, BOX_STYLE_SMOOTH);
-            CHECK(lit_pixels(&f) > 240 * 200); /* the sky fills it */
+            CHECK(lit_pixels(&f) > 2000 && lit_pixels(&f) < 240 * 120); /* black, mostly */
             box_frame_t grid;
             CHECK(box_frame_init(&grid, 48, 48));
             box_scene_render(s, &grid, 0, BOX_STYLE_LED);
@@ -193,13 +224,13 @@ static void test_glance(void)
     }
     box_frame_free(&f);
     box_event_clear(&ev);
-    CHECK(refused("{\"content\":{\"type\":\"glance\"}}", 422));
     CHECK(refused("{\"content\":{\"type\":\"glance\",\"time\":\"1\",\"sky\":\"lava\"}}", 422));
 }
 
 void run_event_tests(void)
 {
     RUN(test_glance);
+    RUN(test_glance_dots_move_then_rest);
     RUN(test_text_defaults);
     RUN(test_title_colour_align_and_style);
     RUN(test_color_clear_and_image);

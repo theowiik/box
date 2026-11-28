@@ -68,6 +68,10 @@ box_scene_t *box_scene_new_clock(box_clock_fn now, void *ctx, box_rgb_t color);
 box_scene_t *box_scene_new_glance(const char *date, const char *time, const char *temp,
                                   const char *condition, int sky, int mood, box_rgb_t color);
 
+/** The local time glances show, for every glance: the box's own clock.
+ *  Without one, a glance shows the time its sender gave. */
+void box_scene_set_clock(box_clock_fn now, void *ctx);
+
 /** Draw this scene in a fixed style rather than the display's. Only before
  *  the scene is shared. */
 void box_scene_set_style(box_scene_t *scene, box_style_t style);

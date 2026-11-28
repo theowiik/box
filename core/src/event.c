@@ -329,8 +329,7 @@ static box_scene_t *parse_glance(const cJSON *c, box_rgb_t fallback, box_rgb_t *
         return NULL;
     }
     if (!*time) {
-        fail(err, 422, "content.time: required, like 14:05");
-        return NULL;
+        time = "--:--"; /* the box's own clock, once it knows the time */
     }
     int sky = BOX_SKY_CLOUD, mood = BOX_MOOD_GOOD;
     bool has_color;

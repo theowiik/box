@@ -1,6 +1,7 @@
 // The glance's drawing, for scene.c.
 #pragma once
 
+#include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 
@@ -40,5 +41,16 @@ typedef struct {
     box_rgb_t color;
 } box_glance_t;
 
-void box_glance_draw_smooth(box_frame_t *frame, const box_glance_t *glance);
-void box_glance_draw_led(box_frame_t *frame, const box_glance_t *glance);
+/** The moving parts: the dot clock and the smiley. One per scene. */
+typedef struct box_glance_anim box_glance_anim_t;
+box_glance_anim_t *box_glance_anim_new(void);
+void box_glance_anim_free(box_glance_anim_t *anim);
+/** Points the dots at `time`, and changes exactly when the glance would draw
+ *  differently at `t`: every frame while dots fly or the smiley moves. */
+uint64_t box_glance_anim_version(box_glance_anim_t *anim, const uint32_t *time, size_t count,
+                                 double t);
+
+void box_glance_draw_smooth(box_frame_t *frame, const box_glance_t *glance,
+                            const box_glance_anim_t *anim, double t);
+void box_glance_draw_led(box_frame_t *frame, const box_glance_t *glance,
+                         const box_glance_anim_t *anim, double t);

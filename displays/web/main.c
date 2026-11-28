@@ -361,6 +361,7 @@ int main(int argc, char **argv)
     box_scheduler_set_log(box_scheduler(the_box), log_line, NULL);
     box_request_brightness(the_box, 1.0f);
     box_set_style(the_box, style);
+    box_scene_set_clock(local_time, NULL); /* glances keep this time too */
     box_scene_t *clock = box_scene_new_clock(local_time, NULL, CLOCK_COLOR);
     box_set_idle(the_box, clock, now_s());
     box_scene_release(clock);
