@@ -201,7 +201,8 @@ static void weather_icon(box_frame_t *f, box_glance_sky_t sky, float cx, float c
 #define FLOOR 13.0f        /* where loose balls land, below the digits */
 #define BOUNCE 0.45f
 #define FRICTION 0.985f    /* per step, for a ball rolling on the floor */
-#define PICK_UP 0.9f       /* seconds the loose balls fall before the new time pulls them */
+#define SETTLED 1.0f      /* loose balls slower than this have landed */
+#define PICK_UP_MAX 3.0f  /* never wait longer than this for the pile to settle */
 #define FADE 1.2f          /* seconds a spare ball lies there before it is gone */
 #define REST 0.02f         /* below this speed a ball is still */
 
@@ -513,6 +514,18 @@ static int columns(const box_glance_anim_t *a)
     return a->shown_count ? box_text_width(a->shown_count, 1) : 1;
 }
 
+/* The pile has landed: no loose ball still falling or rolling. */
+static bool settled(const box_glance_anim_t *a)
+{
+    for (size_t i = 0; i < a->count; ++i) {
+        const ball_t *b = &a->balls[i];
+        if (!b->held && (fabsf(b->vx) + fabsf(b->vy) > SETTLED)) {
+            return false;
+        }
+    }
+    return true;
+}
+
 uint64_t box_glance_anim_version(box_glance_anim_t *a, const uint32_t *time, size_t n, double t)
 {
     if (n > 8) {
@@ -533,7 +546,7 @@ uint64_t box_glance_anim_version(box_glance_anim_t *a, const uint32_t *time, siz
     const int cols = columns(a);
     while (a->now + STEP <= t) {
         a->now += STEP;
-        if (a->pending && a->now - a->changed >= PICK_UP) {
+        if (a->pending && (a->now - a->changed >= PICK_UP_MAX || (a->now - a->changed > 0.1 && settled(a)))) {
             pick_up(a);
         }
         step(a, cols);
