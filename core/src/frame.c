@@ -68,7 +68,13 @@ bool box_frame_init(box_frame_t *frame, int width, int height)
     }
     frame->width = width;
     frame->height = height;
+    box_frame_changed_all(frame);
     return true;
+}
+
+void box_frame_changed_all(box_frame_t *frame)
+{
+    frame->changed = (box_rect_t){0, 0, frame->width - 1, frame->height - 1};
 }
 
 void box_frame_free(box_frame_t *frame)

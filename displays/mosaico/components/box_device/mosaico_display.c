@@ -289,12 +289,21 @@ static bool convert(const box_frame_t *frame, rect_t *dirty)
     if (frame->width != s.width || frame->height != s.height) {
         return false;
     }
+    /* Only where the core says it may have changed; all of it the first time. */
+    box_rect_t look = frame->changed;
+    if (!s.drawn) {
+        look = (box_rect_t){0, 0, s.width - 1, s.height - 1};
+    }
+    look.x1 = look.x1 < 0 ? 0 : look.x1;
+    look.y1 = look.y1 < 0 ? 0 : look.y1;
+    look.x2 = look.x2 >= s.width ? s.width - 1 : look.x2;
+    look.y2 = look.y2 >= s.height ? s.height - 1 : look.y2;
     int x1 = s.width, y1 = s.height, x2 = -1, y2 = -1;
-    const uint8_t *src = frame->pixels;
-    for (int y = 0; y < s.height; ++y) {
+    for (int y = look.y1; y <= look.y2; ++y) {
         uint16_t *row = s.screen + (size_t)y * (size_t)s.width;
+        const uint8_t *src = frame->pixels + ((size_t)y * (size_t)s.width + (size_t)look.x1) * 3;
         int first = -1, last = -1;
-        for (int x = 0; x < s.width; ++x, src += 3) {
+        for (int x = look.x1; x <= look.x2; ++x, src += 3) {
             const uint16_t c = rgb565(src);
             if (row[x] != c || !s.drawn) {
                 row[x] = c;

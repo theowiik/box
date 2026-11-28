@@ -73,9 +73,14 @@ const box_frame_t *box_engine_render(box_engine_t *engine, double now)
     const bool redraw = !engine->rendered || version != engine->version ||
                         style != engine->rendered_style;
     if (redraw) {
+        /* Unless the scene says less changed, all of it did. */
+        box_frame_changed_all(&engine->scene);
         if (style == BOX_STYLE_LED) {
             box_scene_render(scene, &engine->grid, t, BOX_STYLE_LED);
             box_led_render(&engine->grid, &engine->scene);
+        } else if (engine->rendered && style == engine->rendered_style) {
+            /* The frame still holds this scene's last look: it may update it. */
+            box_scene_render_again(scene, &engine->scene, t, BOX_STYLE_SMOOTH);
         } else {
             box_scene_render(scene, &engine->scene, t, BOX_STYLE_SMOOTH);
         }
@@ -87,6 +92,7 @@ const box_frame_t *box_engine_render(box_engine_t *engine, double now)
         const double progress = (now - engine->fade_started) / BOX_TRANSITION;
         if (progress >= 1.0) {
             engine->fading = false;
+            box_frame_changed_all(&engine->scene); /* the screen showed the blend */
             engine->shown = &engine->scene;
             return engine->shown;
         }
@@ -97,6 +103,7 @@ const box_frame_t *box_engine_render(box_engine_t *engine, double now)
         for (size_t i = 0; i < bytes; ++i) {
             out[i] = (uint8_t)(scale(cur[i], alpha) + scale(old[i], 255 - alpha));
         }
+        box_frame_changed_all(&engine->out);
         engine->shown = &engine->out;
         return engine->shown;
     }

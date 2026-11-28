@@ -51,6 +51,9 @@ uint64_t box_glance_anim_version(box_glance_anim_t *anim, const uint32_t *time, 
                                  double t);
 
 void box_glance_draw_smooth(box_frame_t *frame, const box_glance_t *glance,
-                            const box_glance_anim_t *anim, double t);
+                            box_glance_anim_t *anim, double t);
+/** Update a frame that holds the last smooth draw: only what moved. */
+void box_glance_draw_smooth_again(box_frame_t *frame, const box_glance_t *glance,
+                                  box_glance_anim_t *anim, double t);
 void box_glance_draw_led(box_frame_t *frame, const box_glance_t *glance,
                          const box_glance_anim_t *anim, double t);

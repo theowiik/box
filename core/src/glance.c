@@ -30,6 +30,19 @@ static const box_rgb_t FEATURES = {70, 45, 20};
 
 /* --- shapes: coverage from distance, so edges are antialiased ------------- */
 
+/* Drawing stays inside this rectangle: an update redraws only what moved,
+ * and must not blend twice over what it left alone. */
+#define NO_CLIP ((box_rect_t){-(1 << 20), -(1 << 20), 1 << 20, 1 << 20})
+static box_rect_t s_clip = {-(1 << 20), -(1 << 20), 1 << 20, 1 << 20};
+
+static void put(box_frame_t *f, int x, int y, box_rgb_t c, float a)
+{
+    if (x >= s_clip.x1 && x <= s_clip.x2 && y >= s_clip.y1 && y <= s_clip.y2) {
+        box_frame_blend_px(f, x, y, c, a);
+    }
+}
+
+
 static float clamp01(float x)
 {
     return x < 0 ? 0 : x > 1 ? 1 : x;
@@ -37,13 +50,38 @@ static float clamp01(float x)
 
 static void disc(box_frame_t *f, float cx, float cy, float r, box_rgb_t c)
 {
-    for (int y = (int)floorf(cy - r - 1); y <= (int)ceilf(cy + r + 1); ++y) {
-        for (int x = (int)floorf(cx - r - 1); x <= (int)ceilf(cx + r + 1); ++x) {
-            const float d = hypotf(x + 0.5f - cx, y + 0.5f - cy);
-            const float a = clamp01(r - d + 0.5f);
-            if (a > 0) {
-                box_frame_blend_px(f, x, y, c, a);
+    /* Hundreds of these a frame on a small chip: clip once, write the solid
+     * middle directly, and blend only the antialiased rim. */
+    int x0 = (int)floorf(cx - r - 1), x1 = (int)ceilf(cx + r + 1);
+    int y0 = (int)floorf(cy - r - 1), y1 = (int)ceilf(cy + r + 1);
+    x0 = x0 > s_clip.x1 ? x0 : s_clip.x1;
+    y0 = y0 > s_clip.y1 ? y0 : s_clip.y1;
+    x1 = x1 < s_clip.x2 ? x1 : s_clip.x2;
+    y1 = y1 < s_clip.y2 ? y1 : s_clip.y2;
+    x0 = x0 > 0 ? x0 : 0;
+    y0 = y0 > 0 ? y0 : 0;
+    x1 = x1 < f->width - 1 ? x1 : f->width - 1;
+    y1 = y1 < f->height - 1 ? y1 : f->height - 1;
+    const float in = r - 0.5f, out = r + 0.5f;
+    const float in2 = in > 0 ? in * in : -1, out2 = out * out;
+    for (int y = y0; y <= y1; ++y) {
+        const float dy = y + 0.5f - cy;
+        uint8_t *p = f->pixels + ((size_t)y * (size_t)f->width + (size_t)x0) * 3;
+        for (int x = x0; x <= x1; ++x, p += 3) {
+            const float dx = x + 0.5f - cx, d2 = dx * dx + dy * dy;
+            if (d2 >= out2) {
+                continue;
             }
+            if (d2 <= in2) {
+                p[0] = c.r;
+                p[1] = c.g;
+                p[2] = c.b;
+                continue;
+            }
+            const float a = r - sqrtf(d2) + 0.5f;
+            p[0] = (uint8_t)(p[0] + (c.r - p[0]) * a + 0.5f);
+            p[1] = (uint8_t)(p[1] + (c.g - p[1]) * a + 0.5f);
+            p[2] = (uint8_t)(p[2] + (c.b - p[2]) * a + 0.5f);
         }
     }
 }
@@ -60,7 +98,7 @@ static void stroke(box_frame_t *f, float x0, float y0, float x1, float y1, float
             const float d = hypotf(px - t * dx, py - t * dy);
             const float a = clamp01(r - d + 0.5f);
             if (a > 0) {
-                box_frame_blend_px(f, x, y, c, a);
+                put(f, x, y, c, a);
             }
         }
     }
@@ -90,7 +128,7 @@ static void round_rect(box_frame_t *f, float x0, float y0, float w, float h, flo
             const float qy = fmaxf(fabsf(py - (y0 + h / 2)) - (h / 2 - r), 0);
             const float a = clamp01(r - hypotf(qx, qy) + 0.5f);
             if (a > 0) {
-                box_frame_blend_px(f, x, y, c, a * alpha);
+                put(f, x, y, c, a * alpha);
             }
         }
     }
@@ -195,15 +233,15 @@ static void weather_icon(box_frame_t *f, box_glance_sky_t sky, float cx, float c
 #define SS 4              /* the time is drawn this many pixels per ball, then sampled */
 #define DOTS_MAX 1024
 #define U 2.0f            /* the old dot gap, in balls: keeps the feel as they shrank */
-#define STEP (1.0f / 120)  /* seconds per physics step */
-#define CATCH_UP 0.5f      /* at most this much simulated at once */
+#define STEP (1.0f / 60)   /* seconds per physics step */
+#define CATCH_UP 0.1f      /* at most this much simulated at once: a slow frame slows time, not the frame after */
 #define GRAVITY (70.0f * U)     /* dot units per second squared */
 #define SPRING 420.0f      /* pull towards a place, per unit of distance */
 #define DAMPING 0.32f      /* of critical: under 1 wobbles */
 #define RADIUS 0.42f       /* a ball, as a share of the gap */
 #define FLOOR 30.0f        /* where loose balls land, below the digits */
 #define BOUNCE 0.45f
-#define FRICTION 0.985f    /* per step, for a ball rolling on the floor */
+#define FRICTION 0.97f     /* per step, for a ball rolling on the floor */
 #define SETTLED (1.0f * U)     /* loose balls slower than this have landed */
 #define PICK_UP_MAX 3.0f  /* never wait longer than this for the pile to settle */
 #define FADE 1.2f          /* seconds a spare ball lies there before it is gone */
@@ -235,6 +273,12 @@ struct box_glance_anim {
     /* The smiley: where it looks, and when it next blinks. */
     float look, look_v;
     double blink_at;
+    box_frame_t still; /* what never moves, drawn once */
+    /* What the frame shows now, to redraw only what moved. */
+    float drawn_x[DOTS_MAX], drawn_y[DOTS_MAX], drawn_a[DOTS_MAX];
+    size_t drawn_count;
+    float drawn_blink, drawn_look;
+    bool drawn;
 };
 
 static float hash01(uint32_t n)
@@ -264,6 +308,9 @@ box_glance_anim_t *box_glance_anim_new(void)
 
 void box_glance_anim_free(box_glance_anim_t *a)
 {
+    if (a) {
+        box_frame_free(&a->still);
+    }
     free(a);
 }
 
@@ -695,8 +742,8 @@ static void draw_dots(box_frame_t *f, const box_glance_anim_t *a, float x, float
 
 /* --- smooth ---------------------------------------------------------------- */
 
-void box_glance_draw_smooth(box_frame_t *f, const box_glance_t *g, const box_glance_anim_t *a,
-                            double t)
+/* Text and the weather, which never move: drawn once per scene and size. */
+static void draw_still(box_frame_t *f, const box_glance_t *g)
 {
     box_frame_clear(f, (box_rgb_t){0, 0, 0}); /* an OLED: black is off */
     const float S = (float)(f->width < f->height ? f->width : f->height), u = S / 100;
@@ -706,9 +753,6 @@ void box_glance_draw_smooth(box_frame_t *f, const box_glance_t *g, const box_gla
     float size = fit_size(BOX_FONT_MEDIUM, 6.5f * u, g->date.cps, g->date.count, width);
     box_font_draw(f, BOX_FONT_MEDIUM, size, g->date.cps, g->date.count, (int)left,
                   (int)(oy + 14 * u), scale_rgb(WHITE, 0.6f));
-    const float pitch = width / columns(a);
-    draw_dots(f, a, left, oy + 22 * u, pitch, true);
-
     const float cy = oy + 76 * u;
     weather_icon(f, g->sky, ox + 18 * u, cy, 10.5f * u);
     const float text_x = ox + 34 * u, text_w = 32 * u;
@@ -718,7 +762,180 @@ void box_glance_draw_smooth(box_frame_t *f, const box_glance_t *g, const box_gla
     size = fit_size(BOX_FONT_MEDIUM, 5.2f * u, g->condition.cps, g->condition.count, text_w);
     box_font_draw(f, BOX_FONT_MEDIUM, size, g->condition.cps, g->condition.count, (int)text_x,
                   (int)(cy + 12 * u), MUTED);
-    smiley(f, g->mood, ox + 81 * u, cy, 10.5f * u, face_of(a, t));
+}
+
+/* Where the moving parts go on a frame of this size. */
+typedef struct {
+    float left, top, pitch, face_x, face_y, face_r;
+} geometry_t;
+
+static geometry_t geometry(const box_frame_t *f)
+{
+    const float S = (float)(f->width < f->height ? f->width : f->height), u = S / 100;
+    const float ox = (f->width - S) / 2, oy = (f->height - S) / 2;
+    return (geometry_t){ox + 8 * u, oy + 22 * u, 84 * u / COLS, ox + 81 * u, oy + 76 * u,
+                        10.5f * u};
+}
+
+static float ball_px(const geometry_t *g, float v, float origin)
+{
+    return origin + (v + 0.5f) * g->pitch;
+}
+
+static box_rect_t ball_rect(const geometry_t *g, float x, float y)
+{
+    const float cx = ball_px(g, x, g->left), cy = ball_px(g, y, g->top);
+    const float r = g->pitch * RADIUS + 1.5f;
+    return (box_rect_t){(int)floorf(cx - r), (int)floorf(cy - r), (int)ceilf(cx + r),
+                        (int)ceilf(cy + r)};
+}
+
+static box_rect_t face_rect(const geometry_t *g)
+{
+    const float r = g->face_r;
+    return (box_rect_t){(int)(g->face_x - r - 2), (int)(g->face_y - r * 1.4f - 2),
+                        (int)(g->face_x + r + 2), (int)(g->face_y + r + 2)};
+}
+
+static void grow(box_rect_t *u, box_rect_t r)
+{
+    u->x1 = r.x1 < u->x1 ? r.x1 : u->x1;
+    u->y1 = r.y1 < u->y1 ? r.y1 : u->y1;
+    u->x2 = r.x2 > u->x2 ? r.x2 : u->x2;
+    u->y2 = r.y2 > u->y2 ? r.y2 : u->y2;
+}
+
+static bool inside(box_rect_t a, box_rect_t b)
+{
+    return a.x1 >= b.x1 && a.y1 >= b.y1 && a.x2 <= b.x2 && a.y2 <= b.y2;
+}
+
+static bool meets(box_rect_t a, box_rect_t b)
+{
+    return a.x1 <= b.x2 && b.x1 <= a.x2 && a.y1 <= b.y2 && b.y1 <= a.y2;
+}
+
+/* Draw the balls and the face that touch the clip, and remember them. */
+static void draw_moving(box_frame_t *f, const box_glance_t *g, box_glance_anim_t *a, double t,
+                        const geometry_t *geo)
+{
+    for (size_t i = 0; i < a->count; ++i) {
+        const ball_t *b = &a->balls[i];
+        if (i >= a->drawn_count || inside(ball_rect(geo, b->x, b->y), s_clip)) {
+            /* Only a ball drawn here shows where it is now. */
+            a->drawn_x[i] = b->x;
+            a->drawn_y[i] = b->y;
+            a->drawn_a[i] = b->alpha;
+        }
+        if (b->alpha > 0.02f && meets(ball_rect(geo, b->x, b->y), s_clip)) {
+            disc(f, ball_px(geo, b->x, geo->left), ball_px(geo, b->y, geo->top),
+                 geo->pitch * RADIUS, b->spare ? scale_rgb(DIM, b->alpha) : WHITE);
+        }
+    }
+    a->drawn_count = a->count;
+    const face_t face = face_of(a, t);
+    if (meets(face_rect(geo), s_clip)) {
+        smiley(f, g->mood, geo->face_x, geo->face_y, geo->face_r, face);
+        if (inside(face_rect(geo), s_clip)) {
+            a->drawn_blink = face.blink;
+            a->drawn_look = face.look;
+        }
+    }
+    a->drawn = true;
+}
+
+void box_glance_draw_smooth(box_frame_t *f, const box_glance_t *g, box_glance_anim_t *a, double t)
+{
+    if (a->still.width != f->width || a->still.height != f->height) {
+        box_frame_free(&a->still);
+        if (box_frame_init(&a->still, f->width, f->height)) {
+            draw_still(&a->still, g);
+        }
+    }
+    if (a->still.pixels) {
+        memcpy(f->pixels, a->still.pixels, box_frame_bytes(f));
+    } else {
+        draw_still(f, g);
+    }
+    const geometry_t geo = geometry(f);
+    s_clip = NO_CLIP;
+    draw_moving(f, g, a, t, &geo);
+    box_frame_changed_all(f);
+}
+
+void box_glance_draw_smooth_again(box_frame_t *f, const box_glance_t *g, box_glance_anim_t *a,
+                                  double t)
+{
+    if (!a->drawn || !a->still.pixels || a->still.width != f->width ||
+        a->still.height != f->height) {
+        box_glance_draw_smooth(f, g, a, t);
+        return;
+    }
+    /* What moved: balls where they were and where they are, and the face. */
+    const geometry_t geo = geometry(f);
+    box_rect_t u = {f->width, f->height, -1, -1};
+    const size_t n = a->count > a->drawn_count ? a->count : a->drawn_count;
+    for (size_t i = 0; i < n; ++i) {
+        const bool was = i < a->drawn_count, is = i < a->count;
+        const ball_t *b = is ? &a->balls[i] : NULL;
+        if (was && is && fabsf(b->x - a->drawn_x[i]) * geo.pitch < 0.02f &&
+            fabsf(b->y - a->drawn_y[i]) * geo.pitch < 0.02f &&
+            fabsf(b->alpha - a->drawn_a[i]) < 0.01f) {
+            continue;
+        }
+        if (was) {
+            grow(&u, ball_rect(&geo, a->drawn_x[i], a->drawn_y[i]));
+        }
+        if (is) {
+            grow(&u, ball_rect(&geo, b->x, b->y));
+        }
+    }
+    const face_t face = face_of(a, t);
+    if (fabsf(face.blink - a->drawn_blink) > 0.001f || fabsf(face.look - a->drawn_look) > 0.001f) {
+        grow(&u, face_rect(&geo));
+    }
+    /* Whatever the area touches is redrawn whole: grow it until nothing
+     * sticks out half drawn. */
+    for (bool grew = u.x2 >= u.x1; grew;) {
+        grew = false;
+        for (size_t i = 0; i < n; ++i) {
+            box_rect_t r[2];
+            int k = 0;
+            if (i < a->drawn_count) {
+                r[k++] = ball_rect(&geo, a->drawn_x[i], a->drawn_y[i]);
+            }
+            if (i < a->count) {
+                r[k++] = ball_rect(&geo, a->balls[i].x, a->balls[i].y);
+            }
+            for (int j = 0; j < k; ++j) {
+                if (meets(r[j], u) && !inside(r[j], u)) {
+                    grow(&u, r[j]);
+                    grew = true;
+                }
+            }
+        }
+        if (meets(face_rect(&geo), u) && !inside(face_rect(&geo), u)) {
+            grow(&u, face_rect(&geo));
+            grew = true;
+        }
+    }
+    u.x1 = u.x1 < 0 ? 0 : u.x1;
+    u.y1 = u.y1 < 0 ? 0 : u.y1;
+    u.x2 = u.x2 >= f->width ? f->width - 1 : u.x2;
+    u.y2 = u.y2 >= f->height ? f->height - 1 : u.y2;
+    f->changed = u;
+    if (u.x2 < u.x1 || u.y2 < u.y1) {
+        return; /* nothing moved enough to see */
+    }
+    /* Put back what never moves there, then draw what touches it. */
+    const size_t row = (size_t)(u.x2 - u.x1 + 1) * 3;
+    for (int y = u.y1; y <= u.y2; ++y) {
+        const size_t at = ((size_t)y * f->width + u.x1) * 3;
+        memcpy(f->pixels + at, a->still.pixels + at, row);
+    }
+    s_clip = u;
+    draw_moving(f, g, a, t, &geo);
+    s_clip = NO_CLIP;
 }
 
 /* --- led ------------------------------------------------------------------- */

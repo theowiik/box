@@ -552,3 +552,22 @@ void box_scene_render(box_scene_t *scene, box_frame_t *frame, double t, box_styl
         break;
     }
 }
+
+void box_scene_render_again(box_scene_t *scene, box_frame_t *frame, double t, box_style_t style)
+{
+    if (scene->content != BOX_CONTENT_GLANCE || style != BOX_STYLE_SMOOTH) {
+        box_scene_render(scene, frame, t, style);
+        return;
+    }
+    update_glance(scene, t);
+    const box_glance_t g = {
+        .date = {scene->title.cps, scene->title.count},
+        .time = {scene->time.cps, scene->time.count},
+        .temp = {scene->temp.cps, scene->temp.count},
+        .condition = {scene->condition.cps, scene->condition.count},
+        .sky = (box_glance_sky_t)scene->sky,
+        .mood = (box_glance_mood_t)scene->mood,
+        .color = scene->color,
+    };
+    box_glance_draw_smooth_again(frame, &g, scene->anim, t);
+}

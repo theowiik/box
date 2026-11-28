@@ -73,14 +73,22 @@ static void render_task(void *arg)
     period = period > 0 ? period : 1;
     TickType_t wake = xTaskGetTickCount();
     uint32_t drawn = 0;
+    int64_t render_us = 0, show_us = 0;
     uint64_t shown_from = mosaico_display_frames_shown();
     int64_t stats_from = esp_timer_get_time();
     for (;;) {
+        const int64_t t0 = esp_timer_get_time();
         xSemaphoreTake(s.lock, portMAX_DELAY);
         const box_frame_t *frame = box_render(s.box, now_s());
         xSemaphoreGive(s.lock);
+        const int64_t t1 = esp_timer_get_time();
         /* Outside the lock: pushing pixels must not hold up incoming events. */
-        drawn += box_show(s.box, frame);
+        const bool pushed = box_show(s.box, frame);
+        drawn += pushed;
+        if (pushed) {
+            render_us += t1 - t0;
+            show_us += esp_timer_get_time() - t1;
+        }
 
         const int64_t now_us = esp_timer_get_time();
         if (now_us - stats_from >= STATS_PERIOD_US) {
@@ -90,6 +98,11 @@ static void render_task(void *arg)
             s.drawn_fps = (float)(drawn / seconds);
             s.shown_fps = (float)((double)(shown - shown_from) / seconds);
             xSemaphoreGive(s.lock);
+            if (drawn > 10) { /* where a busy second goes */
+                ESP_LOGI(TAG, "%.1f fps: render %lld us, show %lld us a frame", drawn / seconds,
+                         (long long)(render_us / drawn), (long long)(show_us / drawn));
+            }
+            render_us = show_us = 0;
             drawn = 0;
             shown_from = shown;
             stats_from = now_us;

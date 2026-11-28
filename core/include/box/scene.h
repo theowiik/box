@@ -99,6 +99,11 @@ uint64_t box_scene_version(box_scene_t *scene, double t);
  *  led; never default). For led, `frame` is the LED grid. */
 void box_scene_render(box_scene_t *scene, box_frame_t *frame, double t, box_style_t style);
 
+/** Draw again into `frame`, which still holds this scene's last render in
+ *  `style`: a scene that moves may update only what moved, and narrow
+ *  frame->changed to it. Others draw afresh. */
+void box_scene_render_again(box_scene_t *scene, box_frame_t *frame, double t, box_style_t style);
+
 /* Image memory budget. Image data lives as long as some queue entry, ambient
  * card or the engine holds it, so it is bounded as a whole rather than per
  * upload: a burst of large uploads must not exhaust the device. */

@@ -200,6 +200,41 @@ static void test_glance_dots_move_then_rest(void)
     box_scene_release(s);
 }
 
+static void test_glance_updates_match_fresh_draws(void)
+{
+    box_scene_set_clock(test_clock, NULL);
+    s_minute = 59;
+    box_scene_t *a = box_scene_new_glance("Friday", "", "1\xc2\xb0", "Clear", 0, 0, (box_rgb_t){0, 0, 0});
+    box_scene_t *b = box_scene_new_glance("Friday", "", "1\xc2\xb0", "Clear", 0, 0, (box_rgb_t){0, 0, 0});
+    box_frame_t fa, fb;
+    CHECK(box_frame_init(&fa, 240, 240) && box_frame_init(&fb, 240, 240));
+    box_scene_version(a, 0);
+    box_scene_version(b, 0);
+    box_scene_render(a, &fa, 0, BOX_STYLE_SMOOTH);
+    s_minute = 0;
+    int worst = 0;
+    bool narrowed = false;
+    for (int i = 1; i < 25 * 6; ++i) {
+        const double t = i / 25.0;
+        box_scene_version(a, t);
+        box_scene_version(b, t);
+        box_scene_render_again(a, &fa, t, BOX_STYLE_SMOOTH);
+        narrowed |= fa.changed.x2 - fa.changed.x1 < 239 || fa.changed.y2 - fa.changed.y1 < 239;
+        box_scene_render(b, &fb, t, BOX_STYLE_SMOOTH);
+        for (size_t k = 0; k < box_frame_bytes(&fa); ++k) {
+            const int d = abs(fa.pixels[k] - fb.pixels[k]);
+            worst = d > worst ? d : worst;
+        }
+    }
+    CHECK(worst <= 10); /* the same picture, give or take a ball drifting under 0.02 px */
+    CHECK(narrowed);   /* and usually less than all of it changed */
+    box_frame_free(&fa);
+    box_frame_free(&fb);
+    box_scene_release(a);
+    box_scene_release(b);
+    box_scene_set_clock(NULL, NULL);
+}
+
 static void test_glance(void)
 {
     box_event_t ev;
@@ -235,6 +270,7 @@ void run_event_tests(void)
 {
     RUN(test_glance);
     RUN(test_glance_dots_move_then_rest);
+    RUN(test_glance_updates_match_fresh_draws);
     RUN(test_text_defaults);
     RUN(test_title_colour_align_and_style);
     RUN(test_color_clear_and_image);
