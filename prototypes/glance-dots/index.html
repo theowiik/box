@@ -1,0 +1,390 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Dot clock prototype</title>
+<style>
+  @font-face { font-family: BoxInter; src: url(Inter-Bold-latin.ttf); font-weight: 800; }
+  body { margin: 0; background: #000; color: #888; font: 13px system-ui, sans-serif; }
+  canvas { display: block; margin: 20px auto; background: #000; }
+  .controls { display: flex; flex-wrap: wrap; gap: 16px; justify-content: center; padding: 0 16px 20px; }
+  label { display: flex; flex-direction: column; gap: 4px; }
+  input[type=text] { width: 80px; background: #111; color: #eee; border: 1px solid #333; padding: 4px; }
+  button { background: #222; color: #eee; border: 1px solid #444; padding: 6px 12px; cursor: pointer; }
+  #state { min-width: 140px; color: #666; align-self: center; }
+</style>
+</head>
+<body>
+<canvas id="c" width="800" height="400"></canvas>
+<div class="controls">
+  <label>Text <input id="text" type="text" value=""></label>
+  <button id="next">Next</button>
+  <button id="shake">Shake</button>
+  <label><input id="live" type="checkbox" checked> Follow real clock</label>
+  <label><input id="secs" type="checkbox"> Show seconds</label>
+  <label>Pull <input id="pull" type="range" min="200" max="20000" value="5000"></label>
+  <label>Damping <input id="damp" type="range" min="0" max="100" value="35"></label>
+  <label>Dot size <input id="size" type="range" min="2" max="8" step="0.5" value="3.5"></label>
+  <label>Dots <input id="count" type="range" min="300" max="2500" step="50" value="1300"></label>
+  <label><input id="field" type="checkbox"> Show field</label>
+  <span id="state"></span>
+</div>
+<script>
+// A fixed set of dots: the count never changes with the time. Each connected
+// piece of the text (the 1, each 5, each colon dot) takes a share of them by
+// its size; when the time changes, the shares change and dots move from piece
+// to piece. A dot falls into its piece ("gravity towards the font"); inside,
+// the letter edge is a wall and dots push each other apart, so they spread out
+// and fill the shape. Once everything has calmed down the clock freezes: a
+// still screen is perfectly still.
+const cv = document.getElementById('c'), g = cv.getContext('2d');
+const W = cv.width, H = cv.height, CELL = 2, GW = W / CELL, GH = H / CELL;
+const $ = id => document.getElementById(id);
+
+const WALL = 0.5;        // dot centres stay this many radii inside the edge
+const SLOP = 0.05;       // px of overlap tolerated between dots
+const CALM = 0.05;       // px per step, averaged: below this the clock is calm
+const CALM_STEPS = 30;   // calm this long (0.5 s) and it freezes
+const MAX_STEPS = 480;   // and it freezes after 8 s whatever happens
+
+let comps = [];          // {field: Float32Array (signed px), g: group, want, have}
+let text = '', dots = [];
+let layout = [], laidOut = '';   // group keys left to right: d0 c0 d1 c1 d2
+let frozen = false, steps = 0, calmFor = 0;
+let active = new Set();          // groups in motion; the rest stay exactly put
+let shown = {};                  // group key -> the characters it shows
+const all = new Float32Array(GW * GH);  // min over pieces, for Show field
+
+const pad = n => String(n).padStart(2, '0');
+function fmt(sec) {
+  sec = ((sec % 86400) + 86400) % 86400;
+  const hm = pad(sec / 3600 | 0) + ':' + pad((sec / 60 | 0) % 60);
+  return $('secs').checked ? hm + ':' + pad(sec % 60) : hm;
+}
+function now() {
+  const d = new Date();
+  return fmt(d.getHours() * 3600 + d.getMinutes() * 60 + d.getSeconds());
+}
+
+// Every character sits centred in a fixed slot (all digits as wide as the
+// widest), sized for the full width, so a new digit never shifts the others.
+function buildField(t) {
+  const m = document.createElement('canvas'); m.width = GW; m.height = GH;
+  const mg = m.getContext('2d');
+  mg.fillStyle = '#fff'; mg.textAlign = 'center'; mg.textBaseline = 'middle';
+  let fs = GH * 0.85;
+  mg.font = `800 ${fs}px BoxInter, sans-serif`;
+  const slot = ch => /\d/.test(ch) ? Math.max(...[...'0123456789'].map(d => mg.measureText(d).width)) : mg.measureText(ch).width;
+  const shape = [...t].map(ch => /\d/.test(ch) ? '0' : ch).join('');
+  const width = s => [...s].reduce((w, ch) => w + slot(ch), 0);
+  fs *= Math.min(1, GW * 0.92 / width(shape));
+  mg.font = `800 ${fs}px BoxInter, sans-serif`;
+  // Groups: each run of digits (HH, MM, SS) and each colon is one group.
+  let x = (GW - width(shape)) / 2, run = 0, colon = 0, prevDigit = false;
+  const slots = [];
+  for (const ch of t) {
+    const w = slot(ch), digit = /\d/.test(ch);
+    if (!digit && prevDigit) run++;
+    slots.push({ x0: x, x1: x + w, g: digit ? 'd' + run : 'c' + colon++ });
+    prevDigit = digit;
+    mg.fillText(ch, x + w / 2, GH / 2 + GH * 0.04); x += w;
+  }
+  const groupAt = gx => (slots.find(s => gx < s.x1) || slots[slots.length - 1]).g;
+  layout = [...new Set(slots.map(s => s.g))];
+  const px = mg.getImageData(0, 0, GW, GH).data;
+  const label = new Int32Array(GW * GH).fill(-1);
+  comps = [];
+  for (let s = 0; s < GW * GH; s++) {
+    if (px[s * 4] <= 127 || label[s] >= 0) continue;
+    const inside = new Uint8Array(GW * GH), stack = [s];
+    let area = 0; label[s] = comps.length;
+    while (stack.length) {
+      const i = stack.pop(); inside[i] = 1; area++;
+      const x = i % GW;
+      for (const j of [x > 0 ? i - 1 : -1, x < GW - 1 ? i + 1 : -1, i - GW, i + GW])
+        if (j >= 0 && j < GW * GH && label[j] < 0 && px[j * 4] > 127) { label[j] = comps.length; stack.push(j); }
+    }
+    if (area < 4) continue;
+    const out = chamfer(inside, 0), inn = chamfer(inside, 1), field = new Float32Array(GW * GH);
+    for (let i = 0; i < GW * GH; i++) field[i] = (inside[i] ? -inn[i] : out[i]) * CELL;
+    comps.push({ field, g: groupAt(s % GW) });
+  }
+  all.fill(1e9);
+  for (const c of comps) for (let i = 0; i < GW * GH; i++) all[i] = Math.min(all[i], c.field[i]);
+}
+
+// Distance (in cells) from each cell to the nearest cell whose inside != val.
+function chamfer(inside, val) {
+  const d = new Float32Array(GW * GH), INF = 1e9, A = 1, B = Math.SQRT2;
+  for (let i = 0; i < GW * GH; i++) d[i] = inside[i] === val ? INF : 0;
+  for (let y = 0; y < GH; y++) for (let x = 0; x < GW; x++) {
+    const i = y * GW + x; let v = d[i]; if (!v) continue;
+    if (x > 0) v = Math.min(v, d[i - 1] + A);
+    if (y > 0) { v = Math.min(v, d[i - GW] + A);
+      if (x > 0) v = Math.min(v, d[i - GW - 1] + B);
+      if (x < GW - 1) v = Math.min(v, d[i - GW + 1] + B); }
+    d[i] = v;
+  }
+  for (let y = GH - 1; y >= 0; y--) for (let x = GW - 1; x >= 0; x--) {
+    const i = y * GW + x; let v = d[i]; if (!v) continue;
+    if (x < GW - 1) v = Math.min(v, d[i + 1] + A);
+    if (y < GH - 1) { v = Math.min(v, d[i + GW] + A);
+      if (x < GW - 1) v = Math.min(v, d[i + GW + 1] + B);
+      if (x > 0) v = Math.min(v, d[i + GW - 1] + B); }
+    d[i] = v;
+  }
+  return d;
+}
+
+// Bilinear, so the wall and the slope are smooth instead of 2 px steps.
+function sample(field, x, y) {
+  const fx = Math.max(1, Math.min(GW - 2.001, x / CELL - 0.5)), fy = Math.max(1, Math.min(GH - 2.001, y / CELL - 0.5));
+  const x0 = fx | 0, y0 = fy | 0, tx = fx - x0, ty = fy - y0, i = y0 * GW + x0;
+  const a = field[i], b = field[i + 1], c = field[i + GW], d = field[i + GW + 1];
+  return { d: a + (b - a) * tx + (c - a) * ty + (a - b - c + d) * tx * ty,
+           gx: ((b - a) * (1 - ty) + (d - c) * ty) / CELL, gy: ((c - a) * (1 - tx) + (d - b) * tx) / CELL };
+}
+const distTo = (c, p) => sample(c.field, p.x, p.y).d;
+
+// Wake some groups (all by default). Groups not woken don't move at all.
+function wake(groups = layout) {
+  for (const g of groups) active.add(g);
+  frozen = !active.size; steps = 0; calmFor = 0;
+}
+
+function setText(t) {
+  if (t === text) return;
+  text = t; buildField(t);
+  if (layout.join() !== laidOut) regroup();
+  // Only groups whose characters changed move: a new minute wakes MM only.
+  const before = shown; shown = groupText(t);
+  balance(); wake(layout.filter(g => shown[g] !== before[g]));
+}
+
+function groupText(t) {
+  const out = {}; let run = 0, colon = 0, prev = false;
+  for (const ch of t) {
+    const digit = /\d/.test(ch);
+    if (!digit && prev) run++;
+    const g = digit ? 'd' + run : 'c' + colon++;
+    out[g] = (out[g] || '') + ch; prev = digit;
+  }
+  return out;
+}
+
+const roomOf = c => { const r = +$('size').value; let n = 0; for (let i = 0; i < GW * GH; i++) if (c.field[i] <= -WALL * r) n++; return n; };
+// Largest-remainder rounding: split n by weights into integers summing to n.
+function split(n, weights) {
+  const sum = weights.reduce((a, b) => a + b, 0) || 1;
+  const exact = weights.map(w => n * w / sum), out = exact.map(Math.floor);
+  let left = n - out.reduce((a, b) => a + b, 0);
+  exact.map((e, i) => [e - out[i], i]).sort((a, b) => b[0] - a[0]).slice(0, left).forEach(([, i]) => out[i]++);
+  return out;
+}
+
+// Give each group (HH, each colon, MM, SS) a fixed pool of dots, by its size
+// now. Only a new layout (seconds on/off) or the Dots slider does this;
+// after that a group's dots stay in the group, so a new minute only moves
+// dots inside MM.
+function regroup() {
+  laidOut = layout.join();
+  const live = dots.filter(p => !p.dying).sort((a, b) => a.x - b.x);
+  const pools = split(live.length, layout.map(g => comps.filter(c => c.g === g).reduce((n, c) => n + roomOf(c), 0)));
+  let i = 0;
+  layout.forEach((g, k) => { for (let n = 0; n < pools[k]; n++) live[i++].g = g; });
+}
+
+// The dots are made once (raining in at the start) and only the Dots slider
+// adds or removes any. Spares fade, missing ones rain in.
+function setCount() {
+  const want = +$('count').value, live = dots.filter(p => !p.dying);
+  for (let i = live.length; i < want; i++)
+    dots.push({ x: Math.random() * W, y: -10 - Math.random() * 150, vx: (Math.random() - .5) * 40, vy: 0, a: 1, dying: false, wob: Math.random(), sp: 0 });
+  for (let i = want; i < live.length; i++) live[i].dying = true;
+}
+
+// Within each group, share its pool out: each piece gets a share by how much
+// room it has (the letter shrunk by the wall), and a spacing that spreads
+// its share evenly over all of it. Dots already in a piece stay, up to its
+// share; the rest move to the nearest piece of the group still short.
+function balance() {
+  const r = +$('size').value, live = dots.filter(p => !p.dying);
+  for (const c of comps) {
+    c.cells = []; for (let i = 0; i < GW * GH; i++) if (c.field[i] <= -WALL * r) c.cells.push(i);
+    c.have = 0;
+  }
+  for (const g of layout) {
+    const gc = comps.filter(c => c.g === g), gd = live.filter(p => p.g === g);
+    split(gd.length, gc.map(c => c.cells.length)).forEach((n, k) => gc[k].want = n);
+    for (const c of gc)   // hexagonal spacing for that many dots in that area
+      c.gap = Math.sqrt(2 * c.cells.length * CELL * CELL / (Math.sqrt(3) * Math.max(1, c.want))) * 0.95;
+    const free = [];
+    for (const p of gd) {
+      const c = gc.find(c => distTo(c, p) <= 0);
+      if (c && c.have < c.want) { p.c = c; c.have++; } else free.push(p);
+    }
+    for (const p of free) {
+      let best = null, bd = 1e9;
+      for (const c of gc) if (c.have < c.want) { const d = distTo(c, p); if (d < bd) { bd = d; best = c; } }
+      p.c = best; best.have++; aim(p);
+    }
+  }
+}
+
+// A dot sent to a piece heads for a random spot anywhere inside it, not the
+// nearest edge, so newcomers spread over the whole letter at once instead
+// of queueing through one end of it.
+function aim(p) {
+  const i = p.c.cells[Math.random() * p.c.cells.length | 0];
+  p.ax = (i % GW + 0.5) * CELL; p.ay = ((i / GW | 0) + 0.5) * CELL;
+  p.best = Infinity; p.noGain = 0;
+}
+
+function step(dt) {
+  // Dying dots fall and fade even while the clock is frozen.
+  for (const p of dots) if (p.dying) { p.a -= dt * 1.2; p.vy += 600 * dt; p.x += p.vx * dt; p.y += p.vy * dt; }
+  dots = dots.filter(p => p.a > 0 && p.y < H + 50);
+  if (frozen) return;
+
+  const r = +$('size').value, pull = +$('pull').value;
+  const k = 4 + +$('damp').value / 100 * 24;   // how hard a dot steers
+  const live = dots.filter(p => !p.dying && active.has(p.g));
+  for (const p of live) {
+    p.ox = p.x; p.oy = p.y;
+    const s = sample(p.c.field, p.x, p.y);
+    // Outside its piece: it wants to fly down the slope into it, faster
+    // from farther away (Pull = top speed). Inside: it wants to stop, and
+    // only the crowd and the wall move it.
+    let wx = 0, wy = 0;
+    if (p.ax !== undefined) {
+      // On its way to its spot: fly at it, slowing down to arrive.
+      const dx = p.ax - p.x, dy = p.ay - p.y, dist = Math.hypot(dx, dy);
+      // It gives up the spot once there, or once it stops getting closer
+      // (the straight way leaves the letter, or the crowd is in the way).
+      if (dist < p.best - 0.5) { p.best = dist; p.noGain = 0; } else p.noGain++;
+      if (dist < 2 * r || p.noGain > 20) p.ax = undefined;
+      else { const v = Math.min(pull / 10, 20 + dist * 5); wx = dx / dist * v; wy = dy / dist * v; }
+    } else if (s.d > 0) {
+      const len = Math.hypot(s.gx, s.gy) || 1, v = Math.min(pull / 10, 30 + s.d * 12);
+      wx = -s.gx / len * v; wy = -s.gy / len * v;
+    }
+    const a = 1 - Math.exp(-k * dt);
+    p.vx += (wx - p.vx) * a;
+    p.vy += (wy - p.vy) * a;
+    p.x += p.vx * dt; p.y += p.vy * dt;
+  }
+  for (let it = 0; it < 4; it++) { collide(live, r, it === 0); contain(live, r); }
+
+  // Freeze once calm: the average dot moves less than CALM per step for
+  // half a second (with every dot home), or 8 s have passed.
+  let moved = 0, out = 0;
+  for (const p of live) {
+    moved += Math.hypot(p.x - p.ox, p.y - p.oy);
+    if (p.ax !== undefined || sample(p.c.field, p.x, p.y).d > 0) out++;
+  }
+  calmFor = live.length && !out && moved / live.length < CALM ? calmFor + 1 : 0;
+  if (++steps >= MAX_STEPS || calmFor >= CALM_STEPS) {
+    frozen = true; active.clear();
+    for (const p of live) p.vx = p.vy = 0;
+  }
+}
+
+// The letter edge is a wall: a dot that has reached its piece and gets
+// pushed out by the crowd is put straight back, so outlines stay crisp.
+function contain(live, r) {
+  for (const p of live) {
+    const s = sample(p.c.field, p.x, p.y), over = s.d + r * WALL;
+    if (over <= SLOP || s.d > r * 3) continue;
+    const len = Math.hypot(s.gx, s.gy) || 1;
+    p.x -= s.gx / len * over; p.y -= s.gy / len * over;
+    // Hitting the wall stops the outward motion, so nothing bounces off it.
+    const vn = (p.vx * s.gx + p.vy * s.gy) / len;
+    if (vn > 0) { p.vx -= s.gx / len * vn; p.vy -= s.gy / len * vn; }
+  }
+}
+
+// Contacts, solved a few times a step so dots can't squeeze into one end of
+// a letter: a full end pushes the rest along until the shape is even. A
+// hair of overlap is allowed and only part of the rest is corrected per
+// pass; correcting every overlap fully makes a packed crowd shiver.
+function collide(live, r, bounce) {
+  const cs = Math.max(2 * r, ...comps.map(c => c.gap)), cols = Math.ceil(W / cs) + 2, grid = new Map();
+  for (const p of live) {
+    const key = (Math.floor(p.y / cs) + 50) * cols + Math.floor(p.x / cs) + 1;
+    let b = grid.get(key); if (!b) grid.set(key, b = []); b.push(p);
+  }
+  // Each dot keeps its piece's spacing (the share spread evenly over all of
+  // it), so the crowd has to reach the far ends instead of piling up where
+  // it came in. Dots of two pieces passing each other use the average.
+  // Cooling: the crowd pushes softer as the change gets older, so it
+  // settles instead of buzzing against the walls.
+  const heat = Math.max(0.1, 1 - steps / 240);
+  for (const p of live) {
+    const cx = Math.floor(p.x / cs) + 1, cy = Math.floor(p.y / cs) + 50;
+    for (let oy = -1; oy <= 1; oy++) for (let ox = -1; ox <= 1; ox++) {
+      const b = grid.get((cy + oy) * cols + cx + ox); if (!b) continue;
+      for (const q of b) {
+        if (q === p) continue;
+        const dx = q.x - p.x, dy = q.y - p.y, d2 = dx * dx + dy * dy;
+        const min = p.c === q.c ? p.c.gap : (p.c.gap + q.c.gap) / 2;
+        if (d2 >= min * min) continue;
+        if (d2 === 0) { q.x += 0.01; continue; }
+        const d = Math.sqrt(d2); if (min - d < SLOP) continue;
+        const push = (min - d - SLOP) * 0.25 * heat, nx = dx / d, ny = dy / d;
+        p.x -= nx * push; p.y -= ny * push;
+        q.x += nx * push; q.y += ny * push;
+        if (!bounce) continue;
+        const rv = (q.vx - p.vx) * nx + (q.vy - p.vy) * ny;
+        if (rv < 0) { const j = rv * 0.4; p.vx += nx * j; p.vy += ny * j; q.vx -= nx * j; q.vy -= ny * j; }
+      }
+    }
+  }
+}
+
+function draw() {
+  g.fillStyle = '#000'; g.fillRect(0, 0, W, H);
+  if ($('field').checked) {
+    const img = g.createImageData(GW, GH);
+    for (let i = 0; i < GW * GH; i++) { const v = all[i] < 0 ? 60 : Math.max(0, 40 - all[i]); img.data[i*4] = v; img.data[i*4+1] = v; img.data[i*4+2] = v * 1.5; img.data[i*4+3] = 255; }
+    const t = document.createElement('canvas'); t.width = GW; t.height = GH; t.getContext('2d').putImageData(img, 0, 0);
+    g.imageSmoothingEnabled = false; g.drawImage(t, 0, 0, W, H);
+  }
+  const r = +$('size').value;
+  for (const p of dots) {
+    // Colour follows a smoothed speed, so small nudges can't flash it.
+    p.sp = p.sp * 0.85 + Math.hypot(p.vx, p.vy) * 0.15;
+    const sp = Math.min(1, Math.max(0, p.sp - 20) / 300);
+    g.globalAlpha = Math.max(0, p.a);
+    g.fillStyle = `hsl(${40 - sp * 30}, ${60 + sp * 40}%, ${85 - sp * 25}%)`;
+    g.beginPath(); g.arc(p.x, p.y, r * (0.85 + p.wob * 0.25), 0, Math.PI * 2); g.fill();
+  }
+  g.globalAlpha = 1;
+  $('state').textContent = frozen ? `still · ${dots.length} dots` : `moving · ${dots.length} dots`;
+}
+
+let fake = null, last = performance.now(), acc = 0;
+function frame(t) {
+  setText($('live').checked ? now() : (fake || $('text').value || now()));
+  acc += Math.min(0.1, (t - last) / 1000); last = t;
+  while (acc >= 1 / 60) { step(1 / 60); acc -= 1 / 60; }
+  draw();
+  requestAnimationFrame(frame);
+}
+
+// Next: one minute on, or one second with seconds shown.
+$('next').onclick = () => {
+  $('live').checked = false;
+  const [h, m, s = 0] = (fake || text || now()).split(':').map(Number);
+  fake = fmt(h * 3600 + m * 60 + s + ($('secs').checked ? 1 : 60));
+};
+$('secs').onchange = () => { if (fake) { const [h, m, s = 0] = fake.split(':').map(Number); fake = fmt(h * 3600 + m * 60 + s); } };
+$('text').oninput = () => { $('live').checked = false; fake = null; };
+$('shake').onclick = () => { wake(); for (const p of dots) { p.vx += (Math.random() - .5) * 900; p.vy += (Math.random() - .5) * 900; } };
+$('count').oninput = () => { setCount(); regroup(); balance(); wake(); };
+$('size').oninput = () => { balance(); wake(); };
+$('pull').oninput = $('damp').oninput = wake;
+
+document.fonts.load("800 40px BoxInter").then(() => { setCount(); setText(now()); requestAnimationFrame(frame); });
+</script>
+</body>
+</html>

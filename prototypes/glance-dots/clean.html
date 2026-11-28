@@ -1,0 +1,234 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Dot clock, clean</title>
+<style>
+  @font-face { font-family: BoxInter; src: url(Inter-Bold-latin.ttf); font-weight: 800; }
+  body { margin: 0; background: #000; color: #888; font: 13px system-ui, sans-serif; }
+  canvas { display: block; margin: 20px auto; background: #000; }
+  .controls { display: flex; flex-wrap: wrap; gap: 16px; justify-content: center; padding: 0 16px 20px; }
+  label { display: flex; flex-direction: column; gap: 4px; }
+  button { background: #222; color: #eee; border: 1px solid #444; padding: 6px 12px; cursor: pointer; }
+  #state { min-width: 140px; color: #666; align-self: center; }
+</style>
+</head>
+<body>
+<canvas id="c" width="800" height="400"></canvas>
+<div class="controls">
+  <button id="next">Next</button>
+  <label><input id="live" type="checkbox" checked> Follow real clock</label>
+  <label><input id="secs" type="checkbox"> Show seconds</label>
+  <label>Grid <input id="grid" type="range" min="5" max="14" step="0.5" value="8"></label>
+  <label>Dot size <input id="size" type="range" min="0.3" max="0.7" step="0.01" value="0.42"></label>
+  <label>Spring <input id="spring" type="range" min="20" max="300" value="90"></label>
+  <label>Bounce <input id="bounce" type="range" min="0" max="90" value="35"></label>
+  <label>Wobble <input id="wobble" type="range" min="0" max="100" value="30"></label>
+  <span id="state"></span>
+</div>
+<script>
+// The clean way: the time is sampled on a regular grid, and every grid point
+// inside a character is a home for one dot. Each dot is pulled home by its
+// own damped spring (stiffness varies per dot, so they don't move in
+// lockstep), and once everything is home it sits exactly on the grid and the
+// clock stops.
+//
+// Dots never appear or disappear. Each group (HH, MM, SS and each colon) owns
+// a fixed set of dots, as many as its widest pair of digits needs. When a
+// pair needs fewer, the spares rest exactly on top of another dot, so they
+// can't be seen. When the time changes, only the changed groups move: a dot
+// whose home is still part of the new digits keeps it, the rest are matched
+// to the new homes nearest first.
+const cv = document.getElementById('c'), g = cv.getContext('2d');
+const W = cv.width, H = cv.height;
+const $ = id => document.getElementById(id);
+
+let text = '', groups = new Map();   // key -> {dots, homes}
+let frozen = false, fake = null;
+
+const pad = n => String(n).padStart(2, '0');
+function fmt(sec) {
+  sec = ((sec % 86400) + 86400) % 86400;
+  const hm = pad(sec / 3600 | 0) + ':' + pad((sec / 60 | 0) % 60);
+  return $('secs').checked ? hm + ':' + pad(sec % 60) : hm;
+}
+function now() {
+  const d = new Date();
+  return fmt(d.getHours() * 3600 + d.getMinutes() * 60 + d.getSeconds());
+}
+
+// Layout: every character centred in a fixed slot (all digits as wide as the
+// widest), the whole line fitted to the canvas. Slots are grouped: runs of
+// digits (HH, MM, SS) and each colon.
+function layout(t) {
+  const m = g; m.save();
+  let fs = H * 0.6;
+  m.font = `800 ${fs}px BoxInter, sans-serif`;
+  const dw = Math.max(...[...'0123456789'].map(d => m.measureText(d).width));
+  const cw = m.measureText(':').width;
+  const total = [...t].reduce((w, ch) => w + (ch === ':' ? cw : dw), 0);
+  const scale = Math.min(1, W * 0.94 / total);
+  fs *= scale;
+  m.restore();
+  const slots = [];
+  let x = (W - total * scale) / 2, run = 0, colon = 0, prevDigit = false;
+  for (const ch of t) {
+    const digit = ch !== ':', w = (digit ? dw : cw) * scale;
+    if (!digit && prevDigit) run++;
+    slots.push({ ch, x, w, g: digit ? 'd' + run : 'c' + colon++ });
+    prevDigit = digit; x += w;
+  }
+  return { fs, slots };
+}
+
+// Grid points inside one character in its slot. Cached per character, slot
+// position and grid size.
+const homeCache = new Map();
+function homesOf(ch, slot, fs, step) {
+  const key = [ch, slot.x.toFixed(1), fs.toFixed(1), step].join();
+  if (homeCache.has(key)) return homeCache.get(key);
+  const m = document.createElement('canvas'); m.width = W; m.height = H;
+  const mg = m.getContext('2d');
+  mg.fillStyle = '#fff'; mg.textAlign = 'center'; mg.textBaseline = 'middle';
+  mg.font = `800 ${fs}px BoxInter, sans-serif`;
+  mg.fillText(ch, slot.x + slot.w / 2, H / 2 + fs * 0.04);
+  const px = mg.getImageData(0, 0, W, H).data, out = [];
+  // One grid for the whole canvas, so all characters line up like a matrix.
+  const ox = (W % step) / 2, oy = (H % step) / 2;
+  for (let y = oy; y < H; y += step) for (let x = ox; x < W; x += step) {
+    const i = ((y | 0) * W + (x | 0)) * 4;
+    if (px[i] > 127) out.push({ x, y });
+  }
+  homeCache.set(key, out);
+  return out;
+}
+
+// How many dots a group owns: enough for its widest characters.
+function poolSize(gslots, fs, step) {
+  return gslots.reduce((n, s) => n + (s.ch === ':' ? homesOf(':', s, fs, step).length
+    : Math.max(...[...'0123456789'].map(d => homesOf(d, s, fs, step).length))), 0);
+}
+
+function setText(t, force) {
+  if (t === text && !force) return;
+  const step = +$('grid').value, { fs, slots } = layout(t);
+  const keys = [...new Set(slots.map(s => s.g))];
+  const sameLayout = !force && text && text.length === t.length;
+  const prev = text; text = t;
+  for (const k of keys) {
+    const gs = slots.filter(s => s.g === k);
+    const shows = gs.map(s => s.ch).join('');
+    let grp = groups.get(k);
+    if (!sameLayout || !grp) {
+      grp = { dots: [], shows: '' };
+      const n = poolSize(gs, fs, step);
+      for (let i = 0; i < n; i++) grp.dots.push(newDot());
+      groups.set(k, grp);
+    }
+    if (grp.shows === shows) continue;
+    grp.shows = shows;
+    assign(grp, gs.flatMap(s => homesOf(s.ch, s, fs, step)));
+    frozen = false;
+  }
+  if (!sameLayout) for (const k of [...groups.keys()]) if (!keys.includes(k)) groups.delete(k);
+}
+
+function newDot() {
+  // Starts somewhere above the screen and falls in.
+  return { x: Math.random() * W, y: -20 - Math.random() * 200, vx: 0, vy: 0, hx: 0, hy: 0,
+           k: 0.75 + Math.random() * 0.5, r: 0.9 + Math.random() * 0.2, home: false };
+}
+
+// Match the group's dots to the new homes: a dot already on a home that is
+// still a home keeps it; the rest go to the nearest free home, closest pairs
+// first; spares stack exactly on the home nearest to them.
+function assign(grp, homes) {
+  const key = h => h.x + ',' + h.y;
+  const free = new Map(homes.map(h => [key(h), h]));
+  const loose = [];
+  for (const d of grp.dots) {
+    const k = d.home ? d.hx + ',' + d.hy : null;
+    if (k && free.has(k)) free.delete(k); else loose.push(d);
+  }
+  const open = [...free.values()];
+  const pairs = [];
+  for (let i = 0; i < loose.length; i++) for (let j = 0; j < open.length; j++)
+    pairs.push([(loose[i].x - open[j].x) ** 2 + (loose[i].y - open[j].y) ** 2, i, j]);
+  pairs.sort((a, b) => a[0] - b[0]);
+  const usedD = new Set(), usedH = new Set();
+  for (const [, i, j] of pairs) {
+    if (usedD.has(i) || usedH.has(j)) continue;
+    usedD.add(i); usedH.add(j);
+    setHome(loose[i], open[j]);
+  }
+  loose.forEach((d, i) => {
+    if (usedD.has(i)) return;
+    let best = homes[0], bd = Infinity;
+    for (const h of homes) { const e = (d.x - h.x) ** 2 + (d.y - h.y) ** 2; if (e < bd) { bd = e; best = h; } }
+    setHome(d, best);
+  });
+}
+function setHome(d, h) {
+  // Wobble: a small random kick as it leaves, so a group doesn't move as one.
+  if (d.home && (d.hx !== h.x || d.hy !== h.y)) {
+    const w = +$('wobble').value * 3;
+    d.vx += (Math.random() - 0.5) * w; d.vy += (Math.random() - 0.5) * w - w * 0.3;
+  }
+  d.hx = h.x; d.hy = h.y; d.home = true;
+}
+
+function step(dt) {
+  if (frozen) return;
+  const k0 = +$('spring').value, zeta = 1 - +$('bounce').value / 100;
+  let busy = false;
+  for (const grp of groups.values()) for (const d of grp.dots) {
+    const k = k0 * d.k, c = 2 * zeta * Math.sqrt(k);   // damped spring, unit mass
+    d.vx += (k * (d.hx - d.x) - c * d.vx) * dt;
+    d.vy += (k * (d.hy - d.y) - c * d.vy) * dt;
+    d.x += d.vx * dt; d.y += d.vy * dt;
+    if (Math.abs(d.x - d.hx) + Math.abs(d.y - d.hy) > 0.05 || Math.abs(d.vx) + Math.abs(d.vy) > 1) busy = true;
+  }
+  if (!busy) {
+    // Everything is home: snap exactly onto the grid and stop.
+    for (const grp of groups.values()) for (const d of grp.dots) { d.x = d.hx; d.y = d.hy; d.vx = d.vy = 0; }
+    frozen = true;
+  }
+}
+
+function draw() {
+  g.fillStyle = '#000'; g.fillRect(0, 0, W, H);
+  const r = +$('grid').value * +$('size').value;
+  let n = 0;
+  for (const grp of groups.values()) for (const d of grp.dots) {
+    n++;
+    const sp = Math.min(1, Math.hypot(d.vx, d.vy) / 600);
+    g.fillStyle = `hsl(${40 - sp * 25}, ${55 + sp * 40}%, ${88 - sp * 20}%)`;
+    g.beginPath(); g.arc(d.x, d.y, r * d.r, 0, Math.PI * 2); g.fill();
+  }
+  $('state').textContent = `${frozen ? 'still' : 'moving'} · ${n} dots`;
+}
+
+let last = performance.now(), acc = 0;
+function frame(t) {
+  setText($('live').checked ? now() : (fake || now()));
+  acc += Math.min(0.1, (t - last) / 1000); last = t;
+  while (acc >= 1 / 120) { step(1 / 120); acc -= 1 / 120; }
+  draw();
+  requestAnimationFrame(frame);
+}
+
+$('next').onclick = () => {
+  $('live').checked = false;
+  const [h, m, s = 0] = (fake || text || now()).split(':').map(Number);
+  fake = fmt(h * 3600 + m * 60 + s + ($('secs').checked ? 1 : 60));
+};
+$('secs').onchange = () => {
+  if (fake) { const [h, m, s = 0] = fake.split(':').map(Number); fake = fmt(h * 3600 + m * 60 + s); }
+};
+$('grid').oninput = () => { groups.clear(); setText($('live').checked ? now() : (fake || now()), true); };
+$('spring').oninput = $('bounce').oninput = () => { frozen = false; };
+
+document.fonts.load("800 40px BoxInter").then(() => requestAnimationFrame(frame));
+</script>
+</body>
+</html>
