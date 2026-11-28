@@ -190,18 +190,21 @@ static void weather_icon(box_frame_t *f, box_glance_sky_t sky, float cx, float c
  * Then each place in the new time pulls the nearest loose ball up out of
  * the pile; spare balls lie there and fade, and if the pile runs short,
  * more rain in from above. */
-#define ROWS 7
-#define DOTS_MAX 240
+#define COLS 60           /* balls across the clock */
+#define ROWS 18           /* balls down it */
+#define SS 4              /* the time is drawn this many pixels per ball, then sampled */
+#define DOTS_MAX 1024
+#define U 2.0f            /* the old dot gap, in balls: keeps the feel as they shrank */
 #define STEP (1.0f / 120)  /* seconds per physics step */
 #define CATCH_UP 0.5f      /* at most this much simulated at once */
-#define GRAVITY 70.0f      /* dot units per second squared */
+#define GRAVITY (70.0f * U)     /* dot units per second squared */
 #define SPRING 420.0f      /* pull towards a place, per unit of distance */
 #define DAMPING 0.32f      /* of critical: under 1 wobbles */
 #define RADIUS 0.42f       /* a ball, as a share of the gap */
-#define FLOOR 13.0f        /* where loose balls land, below the digits */
+#define FLOOR 30.0f        /* where loose balls land, below the digits */
 #define BOUNCE 0.45f
 #define FRICTION 0.985f    /* per step, for a ball rolling on the floor */
-#define SETTLED 1.0f      /* loose balls slower than this have landed */
+#define SETTLED (1.0f * U)     /* loose balls slower than this have landed */
 #define PICK_UP_MAX 3.0f  /* never wait longer than this for the pile to settle */
 #define FADE 1.2f          /* seconds a spare ball lies there before it is gone */
 #define REST 0.02f         /* below this speed a ball is still */
@@ -264,21 +267,57 @@ void box_glance_anim_free(box_glance_anim_t *a)
     free(a);
 }
 
+/* The places of the time's balls: the time drawn in Inter, bold, and every
+ * cell of a COLS x ROWS grid that it mostly covers. */
 static size_t places_of(const uint32_t *cps, size_t n, float (*out)[2])
 {
-    size_t count = 0;
+    box_frame_t mask;
+    if (!n || !box_frame_init(&mask, COLS * SS, ROWS * SS)) {
+        return 0;
+    }
+    const float W = (float)mask.width, H = (float)mask.height;
+    /* Each character keeps a fixed slot (every digit as wide as the widest),
+     * so a changed digit never shifts the others. Digits stand about 0.73 of
+     * the font size: fill the height, fit the width. */
+    static const uint32_t digits[] = {'0', '1', '2', '3', '4', '5', '6', '7', '8', '9'};
+    int digit100 = 0;
+    for (int d = 0; d < 10; ++d) {
+        const int dw = box_font_width(BOX_FONT_BOLD, 100, &digits[d], 1);
+        digit100 = dw > digit100 ? dw : digit100;
+    }
+    float slots100 = 0;
     for (size_t i = 0; i < n; ++i) {
-        const uint8_t *rows = box_font_glyph(cps[i]);
-        for (int y = 0; y < ROWS; ++y) {
-            for (int x = 0; x < BOX_GLYPH_WIDTH && count < DOTS_MAX; ++x) {
-                if (rows[y] & (0x10 >> x)) {
-                    out[count][0] = (float)(i * BOX_GLYPH_ADVANCE + x);
-                    out[count][1] = (float)y;
-                    ++count;
+        slots100 += cps[i] >= '0' && cps[i] <= '9' ? digit100 : box_font_width(BOX_FONT_BOLD, 100, &cps[i], 1);
+    }
+    float size = H / 0.73f;
+    if (slots100 > 0 && slots100 * size / 100 > W) {
+        size = W * 100 / slots100;
+    }
+    float pen = (W - slots100 * size / 100) / 2;
+    for (size_t i = 0; i < n; ++i) {
+        const float slot = (cps[i] >= '0' && cps[i] <= '9' ? digit100 : box_font_width(BOX_FONT_BOLD, 100, &cps[i], 1)) * size / 100;
+        const int cw = box_font_width(BOX_FONT_BOLD, size, &cps[i], 1);
+        box_font_draw(&mask, BOX_FONT_BOLD, size, &cps[i], 1, (int)lroundf(pen + (slot - cw) / 2),
+                      (int)((H + 0.73f * size) / 2), (box_rgb_t){255, 255, 255});
+        pen += slot;
+    }
+    size_t count = 0;
+    for (int y = 0; y < ROWS; ++y) {
+        for (int x = 0; x < COLS && count < DOTS_MAX; ++x) {
+            unsigned sum = 0;
+            for (int dy = 0; dy < SS; ++dy) {
+                for (int dx = 0; dx < SS; ++dx) {
+                    sum += mask.pixels[((size_t)(y * SS + dy) * mask.width + x * SS + dx) * 3];
                 }
+            }
+            if (sum > 255u * SS * SS / 2) {
+                out[count][0] = (float)x;
+                out[count][1] = (float)y;
+                ++count;
             }
         }
     }
+    box_frame_free(&mask);
     return count;
 }
 
@@ -332,8 +371,8 @@ static void set_time(box_glance_anim_t *a, const uint32_t *cps, size_t n, double
         for (size_t i = 0; i < a->count; ++i) {
             ball_t *b = &a->balls[i];
             if (!kept[i] && !b->spare) { /* let go, with a little nudge */
-                b->vx += (rnd(a) - 0.5f) * 6;
-                b->vy -= rnd(a) * 4;
+                b->vx += (rnd(a) - 0.5f) * 6 * U;
+                b->vy -= rnd(a) * 4 * U;
             }
         }
         a->pending = a->want_count > 0;
@@ -365,8 +404,8 @@ static void pick_up(box_glance_anim_t *a)
         }
         if (!best && a->count < DOTS_MAX) {
             best = &a->balls[a->count++];
-            best->x = tx + (rnd(a) - 0.5f) * 3;
-            best->y = -4 - rnd(a) * 8;
+            best->x = tx + (rnd(a) - 0.5f) * 3 * U;
+            best->y = (-4 - rnd(a) * 8) * U;
             best->vx = best->vy = 0;
         }
         if (best) {
@@ -380,6 +419,17 @@ static void pick_up(box_glance_anim_t *a)
     }
     a->want_count = 0;
     a->pending = false;
+}
+
+#define GRID_TOP 40 /* rows above the clock that balls can rain from */
+#define GRID_H (GRID_TOP + (int)FLOOR + 2)
+
+static int cell_of(const ball_t *b)
+{
+    int x = (int)floorf(b->x + 0.5f), y = (int)floorf(b->y + 0.5f) + GRID_TOP;
+    x = x < 0 ? 0 : x >= COLS ? COLS - 1 : x;
+    y = y < 0 ? 0 : y >= GRID_H ? GRID_H - 1 : y;
+    return y * COLS + x;
 }
 
 static void step(box_glance_anim_t *a, int cols)
@@ -400,14 +450,28 @@ static void step(box_glance_anim_t *a, int cols)
     /* Balls knock into each other: push apart, and trade the speed along
      * the line between them. Held balls only meet loose ones. */
     const float d0 = 2 * RADIUS + 0.06f;
+    /* Only neighbours can touch: sort the balls into cells a ball wide. */
+    static int16_t head[COLS * GRID_H], next[DOTS_MAX];
+    memset(head, -1, sizeof(head));
+    for (size_t i = 0; i < a->count; ++i) {
+        const int c = cell_of(&a->balls[i]);
+        next[i] = head[c];
+        head[c] = (int16_t)i;
+    }
     for (size_t i = 0; i < a->count; ++i) {
         ball_t *p = &a->balls[i];
         if (p->alpha <= 0) {
             continue;
         }
-        for (size_t j = i + 1; j < a->count; ++j) {
+        const int c = cell_of(p), cx = c % COLS, cy = c / COLS;
+        for (int ny0 = cy - 1; ny0 <= cy + 1; ++ny0) {
+        for (int nx0 = cx - 1; nx0 <= cx + 1; ++nx0) {
+        if (nx0 < 0 || ny0 < 0 || nx0 >= COLS || ny0 >= GRID_H) {
+            continue;
+        }
+        for (int j = head[ny0 * COLS + nx0]; j >= 0; j = next[j]) {
             ball_t *q = &a->balls[j];
-            if (q->alpha <= 0 || (p->held && q->held)) {
+            if ((size_t)j <= i || q->alpha <= 0 || (p->held && q->held)) {
                 continue;
             }
             const float dx = q->x - p->x, dy = q->y - p->y;
@@ -431,6 +495,8 @@ static void step(box_glance_anim_t *a, int cols)
                 q->vx += imp * nx;
                 q->vy += imp * ny;
             }
+        }
+        }
         }
     }
     for (size_t i = 0; i < a->count; ++i) {
@@ -484,7 +550,7 @@ static void step_face(box_glance_anim_t *a, int cols, double t)
     float sum = 0, n = 0;
     for (size_t i = 0; i < a->count; ++i) {
         const ball_t *b = &a->balls[i];
-        if (!b->held || fabsf(b->vy) > 2) {
+        if (!b->held || fabsf(b->vy) > 2 * U) {
             sum += b->x;
             ++n;
         }
@@ -511,19 +577,23 @@ static face_t face_of(const box_glance_anim_t *a, double t)
 
 static int columns(const box_glance_anim_t *a)
 {
-    return a->shown_count ? box_text_width(a->shown_count, 1) : 1;
+    (void)a;
+    return COLS;
 }
 
 /* The pile has landed: no loose ball still falling or rolling. */
 static bool settled(const box_glance_anim_t *a)
 {
+    float speed = 0;
+    int loose = 0;
     for (size_t i = 0; i < a->count; ++i) {
         const ball_t *b = &a->balls[i];
-        if (!b->held && (fabsf(b->vx) + fabsf(b->vy) > SETTLED)) {
-            return false;
+        if (!b->held) {
+            speed += fabsf(b->vx) + fabsf(b->vy);
+            ++loose;
         }
     }
-    return true;
+    return !loose || speed / loose < SETTLED; /* on average: a pile always jiggles a little */
 }
 
 uint64_t box_glance_anim_version(box_glance_anim_t *a, const uint32_t *time, size_t n, double t)
