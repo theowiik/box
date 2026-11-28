@@ -18,7 +18,6 @@ const char *const BOX_GLANCE_MOODS[] = {"happy", "good", "meh", "sad", NULL};
 
 static const box_rgb_t WHITE = {255, 255, 255};
 static const box_rgb_t MUTED = {150, 158, 170};
-static const box_rgb_t DIM = {120, 126, 136};
 static const box_rgb_t SUN = {255, 200, 60};
 static const box_rgb_t MOON = {225, 230, 245};
 static const box_rgb_t CLOUD = {215, 222, 232};
@@ -217,56 +216,55 @@ static void weather_icon(box_frame_t *f, box_glance_sky_t sky, float cx, float c
     }
 }
 
-/* --- the dot clock: a little physics ---------------------------------------- */
+/* --- the dot clock: dots on springs ----------------------------------------- */
 
-/* Every lit dot of the time is a ball, in dot units (one unit is the gap
- * between dots, y down). Nothing is scripted: gravity pulls every ball, and
- * a ball that belongs to the time hangs from its place on a soft, slightly
- * different spring, so the digits sag and wobble a little and never sit
- * quite perfect. When the minute turns, balls the new time does not need
- * let go: they fall, bounce, knock into each other and pile up on a floor.
- * Then each place in the new time pulls the nearest loose ball up out of
- * the pile; spare balls lie there and fade, and if the pile runs short,
- * more rain in from above. */
-#define COLS 60           /* balls across the clock */
-#define ROWS 18           /* balls down it */
-#define SS 4              /* the time is drawn this many pixels per ball, then sampled */
+/* The time is sampled on a COLS x ROWS grid: every cell it mostly covers is
+ * a home for one dot (in grid units, y down). Each dot is pulled home by its
+ * own damped spring, a little stiffer or softer than the next, so dots that
+ * move don't move as one; once all are home they sit exactly on the grid and
+ * nothing is drawn until the time changes again.
+ *
+ * Dots never appear or disappear. Each group of the time (the hours, each
+ * colon, the minutes) owns a fixed set of dots: as many as its widest digits
+ * need. When its digits need fewer, the spares rest exactly on top of another
+ * dot and aren't drawn. When the time changes only the changed groups move:
+ * a dot whose home is still a home keeps it, the others go to the nearest
+ * free home, and spares stack on the home nearest them. */
+#define COLS 60           /* grid cells across the clock */
+#define ROWS 18           /* and down it */
+#define SS 4              /* the time is drawn this many pixels per cell, then sampled */
 #define DOTS_MAX 1024
-#define U 2.0f            /* the old dot gap, in balls: keeps the feel as they shrank */
-#define STEP (1.0f / 60)   /* seconds per physics step */
-#define CATCH_UP 0.1f      /* at most this much simulated at once: a slow frame slows time, not the frame after */
-#define GRAVITY (70.0f * U)     /* dot units per second squared */
-#define SPRING 420.0f      /* pull towards a place, per unit of distance */
-#define DAMPING 0.32f      /* of critical: under 1 wobbles */
-#define RADIUS 0.42f       /* a ball, as a share of the gap */
-#define FLOOR 30.0f        /* where loose balls land, below the digits */
-#define BOUNCE 0.45f
-#define FRICTION 0.97f     /* per step, for a ball rolling on the floor */
-#define SETTLED (1.0f * U)     /* loose balls slower than this have landed */
-#define PICK_UP_MAX 3.0f  /* never wait longer than this for the pile to settle */
-#define FADE 1.2f          /* seconds a spare ball lies there before it is gone */
-#define REST 0.02f         /* below this speed a ball is still */
+#define TIME_MAX 8        /* characters */
+#define STEP (1.0f / 120) /* seconds per physics step */
+#define CATCH_UP 0.1f     /* at most this much simulated at once: a slow frame slows time, not the frame after */
+#define SPRING 90.0f      /* pull home, per second squared per unit away */
+#define DAMPING 0.65f     /* of critical: under 1 overshoots a little */
+#define KICK 11.0f        /* units per second: a dot leaving its home is nudged */
+#define RADIUS 0.42f      /* a dot, as a share of the grid */
+#define HOME 0.006f       /* this close and this slow, a dot is home */
 
 typedef struct {
     float x, y, vx, vy;
-    float tx, ty;  /* its place in the time, when it has one */
-    float k;       /* its own spring */
-    float alpha;   /* 1 lit .. 0 gone */
-    bool held;     /* hanging from its place */
-    bool spare;    /* loose and not wanted: fading */
-} ball_t;
+    float hx, hy;   /* its home */
+    float k;        /* its own spring */
+    uint8_t group;
+    bool spare;     /* stacked on another dot's home: drawn only on the way */
+} dot_t;
+
+typedef struct {
+    int8_t x, y;
+    uint8_t slot;   /* which character it belongs to */
+} home_t;
 
 struct box_glance_anim {
-    uint32_t shown[8];
+    uint32_t shown[TIME_MAX];
     size_t shown_count;
     bool any;
+    uint32_t shape[TIME_MAX]; /* the layout: '0' for every digit, else the character */
+    uint8_t group_of[TIME_MAX];
     double now;          /* scene time simulated up to */
-    double changed;      /* when the minute last turned */
-    bool pending;        /* places waiting to pull balls up */
-    float want[DOTS_MAX][2];
-    size_t want_count;
     uint32_t seed;
-    ball_t balls[DOTS_MAX];
+    dot_t dots[DOTS_MAX];
     size_t count;
     uint64_t changes;
     bool moving;
@@ -275,7 +273,8 @@ struct box_glance_anim {
     double blink_at;
     box_frame_t still; /* what never moves, drawn once */
     /* What the frame shows now, to redraw only what moved. */
-    float drawn_x[DOTS_MAX], drawn_y[DOTS_MAX], drawn_a[DOTS_MAX];
+    float drawn_x[DOTS_MAX], drawn_y[DOTS_MAX];
+    bool drawn_on[DOTS_MAX];
     size_t drawn_count;
     float drawn_blink, drawn_look;
     bool drawn;
@@ -300,7 +299,6 @@ box_glance_anim_t *box_glance_anim_new(void)
 {
     box_glance_anim_t *a = calloc(1, sizeof(*a));
     if (a) {
-        a->changed = -1e9;
         a->blink_at = 2.5;
     }
     return a;
@@ -314,9 +312,14 @@ void box_glance_anim_free(box_glance_anim_t *a)
     free(a);
 }
 
-/* The places of the time's balls: the time drawn in Inter, bold, and every
- * cell of a COLS x ROWS grid that it mostly covers. */
-static size_t places_of(const uint32_t *cps, size_t n, float (*out)[2])
+static bool is_digit(uint32_t c)
+{
+    return c >= '0' && c <= '9';
+}
+
+/* The homes of the time: drawn in Inter, bold, and every cell of the grid
+ * that it mostly covers, with the character each belongs to. */
+static size_t homes_of(const uint32_t *cps, size_t n, home_t *out)
 {
     box_frame_t mask;
     if (!n || !box_frame_init(&mask, COLS * SS, ROWS * SS)) {
@@ -334,19 +337,20 @@ static size_t places_of(const uint32_t *cps, size_t n, float (*out)[2])
     }
     float slots100 = 0;
     for (size_t i = 0; i < n; ++i) {
-        slots100 += cps[i] >= '0' && cps[i] <= '9' ? digit100 : box_font_width(BOX_FONT_BOLD, 100, &cps[i], 1);
+        slots100 += is_digit(cps[i]) ? digit100 : box_font_width(BOX_FONT_BOLD, 100, &cps[i], 1);
     }
     float size = H / 0.73f;
     if (slots100 > 0 && slots100 * size / 100 > W) {
         size = W * 100 / slots100;
     }
-    float pen = (W - slots100 * size / 100) / 2;
+    float pen = (W - slots100 * size / 100) / 2, ends[TIME_MAX];
     for (size_t i = 0; i < n; ++i) {
-        const float slot = (cps[i] >= '0' && cps[i] <= '9' ? digit100 : box_font_width(BOX_FONT_BOLD, 100, &cps[i], 1)) * size / 100;
+        const float slot = (is_digit(cps[i]) ? digit100 : box_font_width(BOX_FONT_BOLD, 100, &cps[i], 1)) * size / 100;
         const int cw = box_font_width(BOX_FONT_BOLD, size, &cps[i], 1);
         box_font_draw(&mask, BOX_FONT_BOLD, size, &cps[i], 1, (int)lroundf(pen + (slot - cw) / 2),
                       (int)((H + 0.73f * size) / 2), (box_rgb_t){255, 255, 255});
         pen += slot;
+        ends[i] = pen;
     }
     size_t count = 0;
     for (int y = 0; y < ROWS; ++y) {
@@ -358,9 +362,11 @@ static size_t places_of(const uint32_t *cps, size_t n, float (*out)[2])
                 }
             }
             if (sum > 255u * SS * SS / 2) {
-                out[count][0] = (float)x;
-                out[count][1] = (float)y;
-                ++count;
+                size_t slot = 0;
+                while (slot + 1 < n && (x + 0.5f) * SS >= ends[slot]) {
+                    ++slot;
+                }
+                out[count++] = (home_t){(int8_t)x, (int8_t)y, (uint8_t)slot};
             }
         }
     }
@@ -368,219 +374,206 @@ static size_t places_of(const uint32_t *cps, size_t n, float (*out)[2])
     return count;
 }
 
-static void hold(box_glance_anim_t *a, ball_t *b, float tx, float ty)
+/* A new layout (the first time, or a time of another shape): sort the
+ * characters into groups and give each group its dots, enough for its
+ * widest digits. The dots start at home. */
+static void lay_out(box_glance_anim_t *a, const uint32_t *cps, size_t n)
 {
-    b->tx = tx;
-    b->ty = ty;
-    b->k = SPRING * (0.75f + 0.5f * rnd(a)); /* no two hang quite alike */
-    b->held = true;
-    b->spare = false;
-    b->alpha = 1;
+    static home_t homes[DOTS_MAX];
+    size_t most[TIME_MAX] = {0};
+    uint32_t probe[TIME_MAX];
+    for (uint32_t d = '0'; d <= '9'; ++d) {
+        for (size_t i = 0; i < n; ++i) {
+            probe[i] = is_digit(cps[i]) ? d : cps[i];
+        }
+        size_t per[TIME_MAX] = {0};
+        const size_t nh = homes_of(probe, n, homes);
+        for (size_t j = 0; j < nh; ++j) {
+            ++per[homes[j].slot];
+        }
+        for (size_t i = 0; i < n; ++i) {
+            most[i] = per[i] > most[i] ? per[i] : most[i];
+        }
+    }
+    uint8_t group = 0;
+    for (size_t i = 0; i < n; ++i) {
+        a->shape[i] = is_digit(cps[i]) ? '0' : cps[i];
+        if (i > 0 && !(is_digit(cps[i]) && is_digit(cps[i - 1]))) {
+            ++group;
+        }
+        a->group_of[i] = group;
+    }
+    a->count = 0;
+    for (size_t i = 0; i < n; ++i) {
+        for (size_t k = 0; k < most[i] && a->count < DOTS_MAX; ++k) {
+            dot_t *d = &a->dots[a->count++];
+            *d = (dot_t){0};
+            d->group = a->group_of[i];
+            d->k = SPRING * (0.75f + 0.5f * rnd(a)); /* no two quite alike */
+            d->hx = d->hy = -1;
+        }
+    }
 }
 
-static void set_time(box_glance_anim_t *a, const uint32_t *cps, size_t n, double t)
+static void send_home(box_glance_anim_t *a, dot_t *d, float hx, float hy, bool spare, bool kick)
 {
-    static float next[DOTS_MAX][2];
-    const size_t nn = places_of(cps, n, next);
-    if (!a->any) { /* the first time: hanging still in place */
-        a->count = 0;
-        for (size_t i = 0; i < nn; ++i) {
-            ball_t *b = &a->balls[a->count++];
-            hold(a, b, next[i][0], next[i][1]);
-            b->x = b->tx;
-            b->y = b->ty + GRAVITY / b->k; /* where it rests, sagging */
-            b->vx = b->vy = 0;
-        }
-    } else {
-        /* Balls whose place is still lit keep it; the rest let go. */
-        static bool kept[DOTS_MAX];
-        memset(kept, 0, sizeof(kept));
-        a->want_count = 0;
+    if (kick && (d->hx != hx || d->hy != hy)) { /* nudged as it leaves */
+        d->vx += (rnd(a) - 0.5f) * KICK;
+        d->vy += (rnd(a) - 0.5f) * KICK - KICK * 0.3f;
+    }
+    d->hx = hx;
+    d->hy = hy;
+    d->spare = spare;
+}
+
+/* Match a group's dots to its new homes. */
+static void settle_group(box_glance_anim_t *a, uint8_t group, const home_t *homes, size_t nh,
+                         bool kick)
+{
+    static bool taken[DOTS_MAX];
+    static uint16_t loose[DOTS_MAX], open[DOTS_MAX];
+    size_t nl = 0, no = 0;
+    memset(taken, 0, sizeof(taken));
+    /* Dots on a home that is still a home keep it: dots that show first,
+     * then spares, so a spare never takes a home from the dot under it. */
+    for (int pass = 0; pass < 2; ++pass) {
         for (size_t i = 0; i < a->count; ++i) {
-            a->balls[i].held = false;
-        }
-        for (size_t j = 0; j < nn; ++j) {
-            bool found = false;
-            for (size_t i = 0; i < a->count && !found; ++i) {
-                ball_t *b = &a->balls[i];
-                if (!kept[i] && b->alpha > 0 && fabsf(b->tx - next[j][0]) < 0.01f &&
-                    fabsf(b->ty - next[j][1]) < 0.01f && !b->spare) {
-                    kept[i] = found = true;
-                    b->held = true;
-                }
+            dot_t *d = &a->dots[i];
+            if (d->group != group || d->spare != (pass == 1)) {
+                continue;
             }
-            if (!found) {
-                a->want[a->want_count][0] = next[j][0];
-                a->want[a->want_count][1] = next[j][1];
-                ++a->want_count;
+            size_t j = 0;
+            while (j < nh && (taken[j] || homes[j].x != d->hx || homes[j].y != d->hy)) {
+                ++j;
+            }
+            if (j < nh) {
+                taken[j] = true;
+                d->spare = false;
+            } else {
+                loose[nl++] = (uint16_t)i;
             }
         }
-        for (size_t i = 0; i < a->count; ++i) {
-            ball_t *b = &a->balls[i];
-            if (!kept[i] && !b->spare) { /* let go, with a little nudge */
-                b->vx += (rnd(a) - 0.5f) * 6 * U;
-                b->vy -= rnd(a) * 4 * U;
+    }
+    for (size_t j = 0; j < nh; ++j) {
+        if (!taken[j]) {
+            open[no++] = (uint16_t)j;
+        }
+    }
+    /* Each free home, in a shuffled order, takes the nearest loose dot. */
+    for (size_t j = no; j > 1; --j) {
+        const size_t r = (size_t)(rnd(a) * j) % j;
+        const uint16_t t = open[j - 1];
+        open[j - 1] = open[r];
+        open[r] = t;
+    }
+    for (size_t j = 0; j < no && nl; ++j) {
+        const home_t *h = &homes[open[j]];
+        size_t best = 0;
+        float best_d = 1e9f;
+        for (size_t l = 0; l < nl; ++l) {
+            const dot_t *d = &a->dots[loose[l]];
+            const float e = (d->x - h->x) * (d->x - h->x) + (d->y - h->y) * (d->y - h->y);
+            if (e < best_d) {
+                best_d = e;
+                best = l;
             }
         }
-        a->pending = a->want_count > 0;
+        send_home(a, &a->dots[loose[best]], h->x, h->y, false, kick);
+        loose[best] = loose[--nl];
+    }
+    /* Spares rest on the home nearest them. */
+    for (size_t l = 0; l < nl && nh; ++l) {
+        dot_t *d = &a->dots[loose[l]];
+        size_t best = 0;
+        float best_d = 1e9f;
+        for (size_t j = 0; j < nh; ++j) {
+            const float e = (d->x - homes[j].x) * (d->x - homes[j].x) +
+                            (d->y - homes[j].y) * (d->y - homes[j].y);
+            if (e < best_d) {
+                best_d = e;
+                best = j;
+            }
+        }
+        send_home(a, d, homes[best].x, homes[best].y, true, kick);
+    }
+}
+
+static void set_time(box_glance_anim_t *a, const uint32_t *cps, size_t n)
+{
+    static home_t homes[DOTS_MAX], mine[DOTS_MAX];
+    bool fresh = !a->any || n != a->shown_count;
+    for (size_t i = 0; i < n && !fresh; ++i) {
+        fresh = a->shape[i] != (is_digit(cps[i]) ? '0' : cps[i]);
+    }
+    if (fresh) {
+        lay_out(a, cps, n);
+    }
+    const size_t nh = homes_of(cps, n, homes);
+    for (uint8_t g = 0; g <= a->group_of[n ? n - 1 : 0]; ++g) {
+        bool same = !fresh;
+        for (size_t i = 0; i < n && same; ++i) {
+            same = a->group_of[i] != g || a->shown[i] == cps[i];
+        }
+        if (same) {
+            continue; /* this group shows what it showed: it stays still */
+        }
+        size_t nm = 0;
+        for (size_t j = 0; j < nh; ++j) {
+            if (a->group_of[homes[j].slot] == g) {
+                mine[nm++] = homes[j];
+            }
+        }
+        settle_group(a, g, mine, nm, !fresh);
         a->moving = true;
+    }
+    if (fresh) { /* the first time: everything already home */
+        for (size_t i = 0; i < a->count; ++i) {
+            a->dots[i].x = a->dots[i].hx;
+            a->dots[i].y = a->dots[i].hy;
+        }
+        a->moving = false;
     }
     memcpy(a->shown, cps, n * sizeof(uint32_t));
     a->shown_count = n;
-    a->changed = t;
     a->any = true;
     ++a->changes;
 }
 
-/* The new time pulls up the nearest loose balls; more rain in if needed. */
-static void pick_up(box_glance_anim_t *a)
+static void step(box_glance_anim_t *a)
 {
-    for (size_t j = 0; j < a->want_count; ++j) {
-        const float tx = a->want[j][0], ty = a->want[j][1];
-        ball_t *best = NULL;
-        float best_d = 1e9f;
-        for (size_t i = 0; i < a->count; ++i) {
-            ball_t *b = &a->balls[i];
-            if (!b->held && b->alpha > 0.3f) {
-                const float d = fabsf(b->x - tx) + 0.3f * fabsf(b->y - ty);
-                if (d < best_d) {
-                    best_d = d;
-                    best = b;
-                }
-            }
-        }
-        if (!best && a->count < DOTS_MAX) {
-            best = &a->balls[a->count++];
-            best->x = tx + (rnd(a) - 0.5f) * 3 * U;
-            best->y = (-4 - rnd(a) * 8) * U;
-            best->vx = best->vy = 0;
-        }
-        if (best) {
-            hold(a, best, tx, ty);
-        }
+    if (!a->moving) {
+        return;
     }
-    for (size_t i = 0; i < a->count; ++i) {
-        if (!a->balls[i].held) {
-            a->balls[i].spare = true;
-        }
-    }
-    a->want_count = 0;
-    a->pending = false;
-}
-
-#define GRID_TOP 40 /* rows above the clock that balls can rain from */
-#define GRID_H (GRID_TOP + (int)FLOOR + 2)
-
-static int cell_of(const ball_t *b)
-{
-    int x = (int)floorf(b->x + 0.5f), y = (int)floorf(b->y + 0.5f) + GRID_TOP;
-    x = x < 0 ? 0 : x >= COLS ? COLS - 1 : x;
-    y = y < 0 ? 0 : y >= GRID_H ? GRID_H - 1 : y;
-    return y * COLS + x;
-}
-
-static void step(box_glance_anim_t *a, int cols)
-{
     const float dt = STEP;
-    bool moving = a->pending;
+    bool busy = false;
     for (size_t i = 0; i < a->count; ++i) {
-        ball_t *b = &a->balls[i];
-        float ax = 0, ay = GRAVITY;
-        if (b->held) {
-            const float c = 2 * DAMPING * sqrtf(b->k);
-            ax += b->k * (b->tx - b->x) - c * b->vx;
-            ay += b->k * (b->ty - b->y) - c * b->vy;
-        }
-        b->vx += ax * dt;
-        b->vy += ay * dt;
+        dot_t *d = &a->dots[i];
+        const float c = 2 * DAMPING * sqrtf(d->k); /* damped spring, unit mass */
+        d->vx += (d->k * (d->hx - d->x) - c * d->vx) * dt;
+        d->vy += (d->k * (d->hy - d->y) - c * d->vy) * dt;
+        d->x += d->vx * dt;
+        d->y += d->vy * dt;
+        busy |= fabsf(d->x - d->hx) + fabsf(d->y - d->hy) > HOME ||
+                fabsf(d->vx) + fabsf(d->vy) > 0.1f;
     }
-    /* Balls knock into each other: push apart, and trade the speed along
-     * the line between them. Held balls only meet loose ones. */
-    const float d0 = 2 * RADIUS + 0.06f;
-    /* Only neighbours can touch: sort the balls into cells a ball wide. */
-    static int16_t head[COLS * GRID_H], next[DOTS_MAX];
-    memset(head, -1, sizeof(head));
-    for (size_t i = 0; i < a->count; ++i) {
-        const int c = cell_of(&a->balls[i]);
-        next[i] = head[c];
-        head[c] = (int16_t)i;
+    if (!busy) { /* all home: exactly on the grid, and still */
+        for (size_t i = 0; i < a->count; ++i) {
+            dot_t *d = &a->dots[i];
+            d->x = d->hx;
+            d->y = d->hy;
+            d->vx = d->vy = 0;
+        }
+        a->moving = false;
     }
-    for (size_t i = 0; i < a->count; ++i) {
-        ball_t *p = &a->balls[i];
-        if (p->alpha <= 0) {
-            continue;
-        }
-        const int c = cell_of(p), cx = c % COLS, cy = c / COLS;
-        for (int ny0 = cy - 1; ny0 <= cy + 1; ++ny0) {
-        for (int nx0 = cx - 1; nx0 <= cx + 1; ++nx0) {
-        if (nx0 < 0 || ny0 < 0 || nx0 >= COLS || ny0 >= GRID_H) {
-            continue;
-        }
-        for (int j = head[ny0 * COLS + nx0]; j >= 0; j = next[j]) {
-            ball_t *q = &a->balls[j];
-            if ((size_t)j <= i || q->alpha <= 0 || (p->held && q->held)) {
-                continue;
-            }
-            const float dx = q->x - p->x, dy = q->y - p->y;
-            if (fabsf(dx) >= d0 || fabsf(dy) >= d0) {
-                continue;
-            }
-            const float d = sqrtf(dx * dx + dy * dy);
-            if (d >= d0 || d < 1e-4f) {
-                continue;
-            }
-            const float nx = dx / d, ny = dy / d, push = (d0 - d) / 2;
-            p->x -= nx * push;
-            p->y -= ny * push;
-            q->x += nx * push;
-            q->y += ny * push;
-            const float rel = (q->vx - p->vx) * nx + (q->vy - p->vy) * ny;
-            if (rel < 0) {
-                const float imp = -(1 + BOUNCE) * rel / 2;
-                p->vx -= imp * nx;
-                p->vy -= imp * ny;
-                q->vx += imp * nx;
-                q->vy += imp * ny;
-            }
-        }
-        }
-        }
-    }
-    for (size_t i = 0; i < a->count; ++i) {
-        ball_t *b = &a->balls[i];
-        b->x += b->vx * dt;
-        b->y += b->vy * dt;
-        if (!b->held) {
-            if (b->y > FLOOR) {
-                b->y = FLOOR;
-                b->vy = b->vy > 0 ? -b->vy * BOUNCE : b->vy;
-                b->vx *= FRICTION;
-                if (fabsf(b->vy) < 1.5f) {
-                    b->vy = 0;
-                }
-            }
-            if (b->x < 0 || b->x > cols - 1) {
-                b->x = b->x < 0 ? 0 : (float)(cols - 1);
-                b->vx = -b->vx * BOUNCE;
-            }
-            if (b->spare) {
-                b->alpha -= dt / FADE;
-                if (b->alpha <= 0) {
-                    *b = a->balls[--a->count]; /* gone */
-                    --i;
-                    continue;
-                }
-                moving = true;
-            }
-        }
-        if (fabsf(b->vx) > REST || fabsf(b->vy) > REST) {
-            moving = true;
-        }
-    }
-    a->moving = moving;
 }
 
-/* --- the smiley: it watches the balls, and blinks when it likes ------------- */
+/* A dot is drawn unless it is a spare resting under another. */
+static bool shows(const dot_t *d)
+{
+    return !d->spare || fabsf(d->x - d->hx) + fabsf(d->y - d->hy) > 0.3f;
+}
+
+/* --- the smiley: it watches the dots, and blinks when it likes -------------- */
 
 #define BLINK 0.18f
 
@@ -591,20 +584,23 @@ typedef struct {
     bool moving;
 } face_t;
 
-static void step_face(box_glance_anim_t *a, int cols, double t)
+static void step_face(box_glance_anim_t *a, double t)
 {
-    /* Look at the loose balls while any move; else back to the middle. */
+    /* Look at the dots on their way while any fly; else back to the middle. */
     float sum = 0, n = 0;
     for (size_t i = 0; i < a->count; ++i) {
-        const ball_t *b = &a->balls[i];
-        if (!b->held || fabsf(b->vy) > 2 * U) {
-            sum += b->x;
+        const dot_t *d = &a->dots[i];
+        if (fabsf(d->x - d->hx) + fabsf(d->y - d->hy) > 0.5f) {
+            sum += d->x;
             ++n;
         }
     }
-    const float goal = n ? fmaxf(-1, fminf(1, (sum / n / cols) * 2 - 1)) : 0;
+    const float goal = n ? fmaxf(-1, fminf(1, (sum / n / COLS) * 2 - 1)) : 0;
     a->look_v += (60 * (goal - a->look) - 12 * a->look_v) * STEP;
     a->look += a->look_v * STEP;
+    if (fabsf(a->look) < 0.001f && fabsf(a->look_v) < 0.001f) {
+        a->look = a->look_v = 0; /* at rest: exactly still */
+    }
     if (t > a->blink_at + BLINK) { /* the next blink: some time soon */
         a->blink_at = t + 2 + 5 * rnd(a);
     }
@@ -622,52 +618,26 @@ static face_t face_of(const box_glance_anim_t *a, double t)
     return f;
 }
 
-static int columns(const box_glance_anim_t *a)
-{
-    (void)a;
-    return COLS;
-}
-
-/* The pile has landed: no loose ball still falling or rolling. */
-static bool settled(const box_glance_anim_t *a)
-{
-    float speed = 0;
-    int loose = 0;
-    for (size_t i = 0; i < a->count; ++i) {
-        const ball_t *b = &a->balls[i];
-        if (!b->held) {
-            speed += fabsf(b->vx) + fabsf(b->vy);
-            ++loose;
-        }
-    }
-    return !loose || speed / loose < SETTLED; /* on average: a pile always jiggles a little */
-}
-
 uint64_t box_glance_anim_version(box_glance_anim_t *a, const uint32_t *time, size_t n, double t)
 {
-    if (n > 8) {
-        n = 8;
+    if (n > TIME_MAX) {
+        n = TIME_MAX;
     }
     if (t < a->now) { /* the scene was shown afresh: its clock restarted */
         const double back = a->now - t;
         a->now -= back;
-        a->changed -= back;
         a->blink_at -= back;
     }
     if (!a->any || n != a->shown_count || memcmp(time, a->shown, n * sizeof(uint32_t))) {
-        set_time(a, time, n, t);
+        set_time(a, time, n);
     }
     if (t - a->now > CATCH_UP) { /* away a long time: pick up from now */
         a->now = t - CATCH_UP;
     }
-    const int cols = columns(a);
     while (a->now + STEP <= t) {
         a->now += STEP;
-        if (a->pending && (a->now - a->changed >= PICK_UP_MAX || (a->now - a->changed > 0.1 && settled(a)))) {
-            pick_up(a);
-        }
-        step(a, cols);
-        step_face(a, cols, a->now);
+        step(a);
+        step_face(a, a->now);
     }
     const bool moving = a->moving || face_of(a, t).moving;
     /* A frame number while anything moves; otherwise still. */
@@ -716,17 +686,17 @@ static float fit_size(box_font_face_t face, float size, const uint32_t *cps, siz
     return w > 0 ? fminf(size, max_w * 100 / w) : size;
 }
 
-/* Draw the balls with the clock's top-left at (x, y), `pitch` apart. Smooth
- * draws round balls; led lights the nearest block. */
+/* Draw the dots with the clock's top-left at (x, y), `pitch` apart. Smooth
+ * draws round dots; led lights the nearest block. */
 static void draw_dots(box_frame_t *f, const box_glance_anim_t *a, float x, float y, float pitch,
                       bool round)
 {
     for (size_t i = 0; i < a->count; ++i) {
-        const ball_t *b = &a->balls[i];
-        if (b->alpha <= 0.02f) {
+        const dot_t *b = &a->dots[i];
+        if (!shows(b)) {
             continue;
         }
-        const box_rgb_t c = b->spare ? scale_rgb(DIM, b->alpha) : WHITE;
+        const box_rgb_t c = WHITE;
         if (round) {
             disc(f, x + (b->x + 0.5f) * pitch, y + (b->y + 0.5f) * pitch, pitch * RADIUS, c);
         } else {
@@ -815,21 +785,21 @@ static bool meets(box_rect_t a, box_rect_t b)
     return a.x1 <= b.x2 && b.x1 <= a.x2 && a.y1 <= b.y2 && b.y1 <= a.y2;
 }
 
-/* Draw the balls and the face that touch the clip, and remember them. */
+/* Draw the dots and the face that touch the clip, and remember them. */
 static void draw_moving(box_frame_t *f, const box_glance_t *g, box_glance_anim_t *a, double t,
                         const geometry_t *geo)
 {
     for (size_t i = 0; i < a->count; ++i) {
-        const ball_t *b = &a->balls[i];
+        const dot_t *b = &a->dots[i];
         if (i >= a->drawn_count || inside(ball_rect(geo, b->x, b->y), s_clip)) {
-            /* Only a ball drawn here shows where it is now. */
+            /* Only a dot drawn here shows where it is now. */
             a->drawn_x[i] = b->x;
             a->drawn_y[i] = b->y;
-            a->drawn_a[i] = b->alpha;
+            a->drawn_on[i] = shows(b);
         }
-        if (b->alpha > 0.02f && meets(ball_rect(geo, b->x, b->y), s_clip)) {
+        if (shows(b) && meets(ball_rect(geo, b->x, b->y), s_clip)) {
             disc(f, ball_px(geo, b->x, geo->left), ball_px(geo, b->y, geo->top),
-                 geo->pitch * RADIUS, b->spare ? scale_rgb(DIM, b->alpha) : WHITE);
+                 geo->pitch * RADIUS, WHITE);
         }
     }
     a->drawn_count = a->count;
@@ -871,16 +841,16 @@ void box_glance_draw_smooth_again(box_frame_t *f, const box_glance_t *g, box_gla
         box_glance_draw_smooth(f, g, a, t);
         return;
     }
-    /* What moved: balls where they were and where they are, and the face. */
+    /* What moved: dots where they were and where they are, and the face. */
     const geometry_t geo = geometry(f);
     box_rect_t u = {f->width, f->height, -1, -1};
     const size_t n = a->count > a->drawn_count ? a->count : a->drawn_count;
     for (size_t i = 0; i < n; ++i) {
         const bool was = i < a->drawn_count, is = i < a->count;
-        const ball_t *b = is ? &a->balls[i] : NULL;
+        const dot_t *b = is ? &a->dots[i] : NULL;
         if (was && is && fabsf(b->x - a->drawn_x[i]) * geo.pitch < 0.02f &&
             fabsf(b->y - a->drawn_y[i]) * geo.pitch < 0.02f &&
-            fabsf(b->alpha - a->drawn_a[i]) < 0.01f) {
+            shows(b) == a->drawn_on[i]) {
             continue;
         }
         if (was) {
@@ -905,7 +875,7 @@ void box_glance_draw_smooth_again(box_frame_t *f, const box_glance_t *g, box_gla
                 r[k++] = ball_rect(&geo, a->drawn_x[i], a->drawn_y[i]);
             }
             if (i < a->count) {
-                r[k++] = ball_rect(&geo, a->balls[i].x, a->balls[i].y);
+                r[k++] = ball_rect(&geo, a->dots[i].x, a->dots[i].y);
             }
             for (int j = 0; j < k; ++j) {
                 if (meets(r[j], u) && !inside(r[j], u)) {
@@ -946,9 +916,9 @@ void box_glance_draw_led(box_frame_t *f, const box_glance_t *g, const box_glance
     box_frame_clear(f, (box_rgb_t){0, 0, 0});
     const int G = f->width < f->height ? f->width : f->height;
     const int ox = (f->width - G) / 2, oy = (f->height - G) / 2;
-    int sc = (G - 2 * BOX_TEXT_MARGIN) / columns(a);
+    int sc = (G - 2 * BOX_TEXT_MARGIN) / COLS;
     sc = sc < 1 ? 1 : sc > 3 ? 3 : sc;
-    draw_dots(f, a, (float)(ox + (G - columns(a) * sc) / 2), (float)(oy + G * 14 / 100),
+    draw_dots(f, a, (float)(ox + (G - COLS * sc) / 2), (float)(oy + G * 14 / 100),
               (float)sc, false);
 
     /* The temperature without the degree sign, which the bitmap font lacks;

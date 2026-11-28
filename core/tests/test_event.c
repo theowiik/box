@@ -200,6 +200,45 @@ static void test_glance_dots_move_then_rest(void)
     box_scene_release(s);
 }
 
+/* How many pixels differ between two frames, in columns [x1, x2) of the
+ * clock's band. */
+static int band_diff(const box_frame_t *a, const box_frame_t *b, int x1, int x2)
+{
+    int n = 0;
+    for (int y = 50; y < 115; ++y) {
+        for (int x = x1; x < x2; ++x) {
+            n += memcmp(a->pixels + ((size_t)y * a->width + x) * 3,
+                        b->pixels + ((size_t)y * b->width + x) * 3, 3) != 0;
+        }
+    }
+    return n;
+}
+
+static void test_a_new_minute_moves_only_the_minutes(void)
+{
+    box_scene_set_clock(test_clock, NULL);
+    s_minute = 46;
+    box_scene_t *s = box_scene_new_glance("Friday", "", "1\xc2\xb0", "Clear", 0, 0, (box_rgb_t){0, 0, 0});
+    box_frame_t before, during;
+    CHECK(box_frame_init(&before, 240, 240) && box_frame_init(&during, 240, 240));
+    box_scene_version(s, 0.5);
+    box_scene_render(s, &before, 0.5, BOX_STYLE_SMOOTH);
+    s_minute = 47;
+    int hours = 0, minutes = 0;
+    for (double t = 0.55; t < 3; t += 0.05) {
+        box_scene_version(s, t);
+        box_scene_render(s, &during, t, BOX_STYLE_SMOOTH);
+        hours += band_diff(&before, &during, 0, 85);      /* "15" and the colon */
+        minutes += band_diff(&before, &during, 150, 240);  /* the last digit */
+    }
+    CHECK(hours == 0);  /* the hours' dots never stir */
+    CHECK(minutes > 0); /* while the minute's fly */
+    box_frame_free(&before);
+    box_frame_free(&during);
+    box_scene_release(s);
+    box_scene_set_clock(NULL, NULL);
+}
+
 static void test_glance_updates_match_fresh_draws(void)
 {
     box_scene_set_clock(test_clock, NULL);
@@ -271,6 +310,7 @@ void run_event_tests(void)
     RUN(test_glance);
     RUN(test_glance_dots_move_then_rest);
     RUN(test_glance_updates_match_fresh_draws);
+    RUN(test_a_new_minute_moves_only_the_minutes);
     RUN(test_text_defaults);
     RUN(test_title_colour_align_and_style);
     RUN(test_color_clear_and_image);
