@@ -192,6 +192,10 @@ static void test_glance_dots_move_then_rest(void)
     box_scene_render(s, &f, still + 0.3, BOX_STYLE_SMOOTH);
     CHECK(lit_pixels(&f) > 500);
     box_frame_free(&f);
+    /* Shown afresh, its clock restarts at 0: the dots still move on. */
+    box_scene_version(s, still + 30);
+    s_minute = 48;
+    CHECK(box_scene_version(s, 0.2) != box_scene_version(s, 0.3));
     box_scene_set_clock(NULL, NULL);
     box_scene_release(s);
 }
