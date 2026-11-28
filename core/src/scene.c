@@ -335,10 +335,10 @@ static size_t image_index(const box_scene_t *scene, double t)
 /* Refresh a clock's text; returns minutes since midnight, or -1 if unknown. */
 static int update_clock(box_scene_t *scene)
 {
-    int hour, minute;
+    int hour, minute, second;
     char now[CLOCK_CHARS + 1] = "";
     int stamp = -1;
-    if (scene->clock(scene->clock_ctx, &hour, &minute) && hour >= 0 && hour < 24 &&
+    if (scene->clock(scene->clock_ctx, &hour, &minute, &second) && hour >= 0 && hour < 24 &&
         minute >= 0 && minute < 60) {
         snprintf(now, sizeof(now), "%02d:%02d", hour, minute);
         stamp = hour * 60 + minute;
@@ -363,16 +363,16 @@ void box_scene_set_clock(box_clock_fn now, void *ctx)
 /* A glance keeps the box's time when it knows it, else the sender's. */
 static uint64_t update_glance(box_scene_t *scene, double t)
 {
-    int hour, minute;
+    int hour, minute, second;
     uint32_t now[5];
-    if (s_clock && s_clock(s_clock_ctx, &hour, &minute) && hour >= 0 && hour < 24 &&
+    if (s_clock && s_clock(s_clock_ctx, &hour, &minute, &second) && hour >= 0 && hour < 24 &&
         minute >= 0 && minute < 60) {
         const uint32_t digits[5] = {'0' + hour / 10, '0' + hour % 10, ':', '0' + minute / 10,
                                     '0' + minute % 10};
         memcpy(now, digits, sizeof(now));
-        return box_glance_anim_version(scene->anim, now, 5, t);
+        return box_glance_anim_version(scene->anim, now, 5, second, t);
     }
-    return box_glance_anim_version(scene->anim, scene->time.cps, scene->time.count, t);
+    return box_glance_anim_version(scene->anim, scene->time.cps, scene->time.count, -1, t);
 }
 
 uint64_t box_scene_version(box_scene_t *scene, double t)

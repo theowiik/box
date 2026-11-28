@@ -36,11 +36,12 @@ typedef struct {
     int hour, minute;
 } fake_clock_t;
 
-static bool fake_time(void *ctx, int *hour, int *minute)
+static bool fake_time(void *ctx, int *hour, int *minute, int *second)
 {
     const fake_clock_t *c = ctx;
     *hour = c->hour;
     *minute = c->minute;
+    *second = 0;
     return c->known;
 }
 

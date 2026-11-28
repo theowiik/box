@@ -1,0 +1,171 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Dot clock fonts</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Anton&family=Archivo+Black&family=Bebas+Neue&family=Big+Shoulders+Display:wght@900&family=Inter:wght@500;700&family=Jersey+10&family=Russo+One&family=Squada+One&display=block" rel="stylesheet">
+<style>
+  body { margin: 0; background: #1a1a1a; color: #ccc; font: 13px Inter, system-ui, sans-serif; }
+  #grid { display: grid; grid-template-columns: repeat(var(--cols, 3), var(--tile, 370px)); gap: 10px 16px; padding: 10px 16px; width: max-content; }
+  figure { margin: 0; }
+  canvas { display: block; width: var(--tile, 370px); border-radius: 16px; }
+  figcaption { padding: 4px 2px 0; font-size: 13px; }
+  figcaption b { color: #fff; }
+</style>
+</head>
+<body>
+<div id="grid"></div>
+<script>
+// Candidates for the glance's dot clock, drawn the way the box draws it: dots
+// on a grid, seconds grey. Two kinds:
+//  - seg: digits built on the dot grid itself, thick square-cornered
+//    segments (a heavy digital face): every stroke is whole dots wide.
+//  - font: a font sampled onto the grid at `height` of the free space,
+//    squeezed across only if it doesn't fit.
+// ?all shows every candidate (clock only); ?pick=a,b the chosen ones, whole.
+const ALL = {
+  seg_a: { seg: { w: 9, h: 27, t: 3, gap: 2 }, cols: 76, name: 'Digital blocks', note: 'thick, square' },
+  seg_b: { seg: { w: 10, h: 26, t: 4, gap: 2 }, cols: 84, name: 'Digital blocks, heavy', note: 'heavier strokes' },
+  seg_c: { seg: { w: 10, h: 26, t: 3, gap: 2, split: 1 }, cols: 84, name: 'Digital segments', note: 'a gap between segments' },
+  seg_d: { seg: { w: 12, h: 22, t: 4, gap: 3 }, cols: 96, name: 'Digital blocks, smaller dots', note: 'less tall' },
+  seg_e: { seg: { w: 8, h: 20, t: 3, gap: 2 }, cols: 66, name: 'Digital blocks, big dots' },
+  anton: { font: 'Anton', heavy: 0.05, height: 1, name: 'Anton, heavier' },
+  archivo: { font: 'Archivo Black', height: 1, name: 'Archivo Black' },
+  archivo80: { font: 'Archivo Black', height: 0.72, name: 'Archivo Black, lower', note: 'not squeezed' },
+  russo: { font: 'Russo One', height: 0.72, name: 'Russo One', note: 'not squeezed' },
+  jersey: { font: 'Jersey 10', height: 1, name: 'Jersey 10' },
+  shoulders: { font: 'Big Shoulders Display', weight: 900, height: 1, name: 'Big Shoulders Display' },
+  squada: { font: 'Squada One', height: 1, name: 'Squada One' },
+  bebas: { font: 'Bebas Neue', heavy: 0.06, height: 1, name: 'Bebas Neue, heavier' },
+};
+const Q = new URLSearchParams(location.search);
+const PICK = (Q.get('pick') || '').split(',').filter(Boolean);
+const SHOW_ALL = !PICK.length;
+const VARIANTS = (SHOW_ALL ? Object.keys(ALL) : PICK).map(k => ({ key: k, ...ALL[k] }));
+
+const TIME = '17:05:13', S = 480, u = S / 100, ROWS_DEFAULT = 29, SS = 4, TRACK = 0.06;
+
+// Seven segments: a top, b top right, c bottom right, d bottom, e bottom
+// left, f top left, g middle.
+const SEGS = { 0: 'abcdef', 1: 'bc', 2: 'abged', 3: 'abgcd', 4: 'fgbc', 5: 'afgcd', 6: 'afgedc', 7: 'abc', 8: 'abcdefg', 9: 'abcdfg' };
+function segHomes(v) {
+  const { w, h, t, gap, split = 0 } = v.seg, cols = v.cols;
+  const colon = t, line = 6 * w + 2 * colon + 7 * gap;
+  const out = [];
+  let x0 = Math.floor((cols - line) / 2);
+  const m = Math.floor((h - t) / 2);
+  const rect = (gx, gy, rw, rh, grey) => { for (let y = gy; y < gy + rh; y++) for (let x = gx; x < gx + rw; x++) out.push({ x, y, grey }); };
+  [...TIME].forEach((ch, i) => {
+    const grey = i >= 6;
+    if (ch === ':') {
+      rect(x0, Math.round(h * 0.3) - Math.floor(t / 2), t, t, false);
+      rect(x0, Math.round(h * 0.7) - Math.floor(t / 2), t, t, false);
+      x0 += colon + gap; return;
+    }
+    if (ch === "1") {    // a centred bar: a right-hand 1 leaves a hole beside it
+      rect(x0 + Math.floor((w - t) / 2), 0, t, h, grey);
+      x0 += w + gap; return;
+    }
+    const on = SEGS[ch], s = split;
+    const r = (k, gx, gy, rw, rh) => { if (on.includes(k)) rect(x0 + gx, gy, rw, rh, grey); };
+    r('a', s, 0, w - 2 * s, t);
+    r('g', s, m, w - 2 * s, t);
+    r('d', s, h - t, w - 2 * s, t);
+    r('f', 0, s, t, m + t - 2 * s);
+    r('b', w - t, s, t, m + t - 2 * s);
+    r('e', 0, m + s, t, h - m - 2 * s);
+    r('c', w - t, m + s, t, h - m - 2 * s);
+    x0 += w + gap;
+  });
+  const seen = new Set();   // corners lit by two segments: one dot per cell
+  return { cols, rows: h, homes: out.filter(p => { const k = p.x + ',' + p.y; if (seen.has(k)) return false; seen.add(k); return true; }) };
+}
+
+function fontHomes(v) {
+  const cols = v.cols || 70, rows = Math.round(ROWS_DEFAULT * (v.height || 1));
+  const m = document.createElement('canvas').getContext('2d');
+  m.font = `${v.weight || 400} 100px "${v.font}"`;
+  const dh = m.measureText('0').actualBoundingBoxAscent / 100;
+  const dw = Math.max(...[...'0123456789'].map(d => m.measureText(d).width)) / 100;
+  const cw = m.measureText(':').width / 100;
+  const H = rows * SS, size = H / dh, heavy = (v.heavy || 0) * size, track = TRACK * size;
+  const slots = [...TIME].map(ch => (ch === ':' ? cw : dw) * size + heavy + track);
+  const line = slots.reduce((a, b) => a + b, 0);
+  const across = Math.max(SS, line / cols);
+  const mc = document.createElement('canvas');
+  mc.width = Math.ceil(cols * across); mc.height = H;
+  const g = mc.getContext('2d');
+  g.fillStyle = g.strokeStyle = '#fff'; g.textAlign = 'center';
+  g.font = `${v.weight || 400} ${size}px "${v.font}"`;
+  g.lineWidth = heavy; g.lineJoin = 'round';
+  let pen = (mc.width - line) / 2;
+  const base = (H + dh * size) / 2, ends = [];
+  [...TIME].forEach((ch, i) => {
+    const x = pen + slots[i] / 2;
+    g.fillText(ch, x, base);
+    if (heavy) g.strokeText(ch, x, base);
+    pen += slots[i]; ends.push(pen);
+  });
+  const px = g.getImageData(0, 0, mc.width, mc.height).data, out = [];
+  for (let y = 0; y < rows; y++) for (let x = 0; x < cols; x++) {
+    const x0 = Math.floor(x * across), x1 = Math.floor((x + 1) * across);
+    let sum = 0;
+    for (let dy = 0; dy < SS; dy++) for (let p = x0; p < x1; p++) sum += px[((y * SS + dy) * mc.width + p) * 4];
+    if (sum > 255 * SS * (x1 - x0) / 2) {
+      let slot = 0; while (slot < 7 && (x + 0.5) * across >= ends[slot]) slot++;
+      out.push({ x, y, grey: slot >= 6 });
+    }
+  }
+  return { cols, rows, homes: out };
+}
+
+// The clock centred where the box centres it (39.5 of 100 down).
+function drawClock(g, v) {
+  const { cols, rows, homes } = v.seg ? segHomes(v) : fontHomes(v);
+  const p = 84 * u / cols, top = 39.5 * u - rows * p / 2;
+  for (const h of homes) {
+    g.fillStyle = h.grey ? 'rgb(165,168,174)' : '#fff';
+    g.beginPath(); g.arc(8 * u + (h.x + 0.5) * p, top + (h.y + 0.5) * p, p * 0.42, 0, Math.PI * 2); g.fill();
+  }
+}
+
+function tile(v, whole) {
+  const c = document.createElement('canvas');
+  c.width = S; c.height = whole ? S : 0.5 * S;
+  const g = c.getContext('2d');
+  g.fillStyle = '#000'; g.fillRect(0, 0, S, c.height);
+  if (!whole) { g.translate(0, -15 * u); drawClock(g, v); return c; }
+  g.fillStyle = 'rgba(255,255,255,0.6)'; g.font = `500 ${6.5 * u}px Inter`;
+  g.fillText('Saturday 28 November', 8 * u, 14 * u);
+  drawClock(g, v);
+  g.fillStyle = '#d4dceb';
+  for (const [dx, dy, r] of [[-4, 1, 5], [1, -2, 6.5], [5.5, 1.5, 4.5]]) { g.beginPath(); g.arc((18 + dx) * u, (76 + dy) * u, r * u, 0, Math.PI * 2); g.fill(); }
+  g.fillRect(12 * u, 76 * u, 13 * u, 6 * u);
+  g.fillStyle = '#fff'; g.font = `700 ${15 * u}px Inter`; g.fillText('2°', 34 * u, 79 * u);
+  g.fillStyle = '#9aa2ad'; g.font = `500 ${5.2 * u}px Inter`; g.fillText('Cloudy', 34 * u, 88 * u);
+  g.fillStyle = '#ffd446'; g.beginPath(); g.arc(81 * u, 76 * u, 10.5 * u, 0, Math.PI * 2); g.fill();
+  g.fillStyle = '#462d14';
+  g.fillRect(77 * u, 71 * u, 2.4 * u, 4 * u); g.fillRect(83.6 * u, 71 * u, 2.4 * u, 4 * u);
+  g.fillRect(77 * u, 80 * u, 8 * u, 1.4 * u);
+  return c;
+}
+
+document.fonts.ready.then(async () => {
+  await Promise.all(VARIANTS.filter(v => v.font).map(v => document.fonts.load(`${v.weight || 400} 100px "${v.font}"`)));
+  await document.fonts.load('500 20px Inter');
+  const grid = document.getElementById('grid');
+  if (SHOW_ALL) { grid.style.setProperty('--cols', 3); grid.style.setProperty('--tile', '400px'); }
+  VARIANTS.forEach((v, i) => {
+    const f = document.createElement('figure');
+    f.appendChild(tile(v, !SHOW_ALL));
+    const cap = document.createElement('figcaption');
+    cap.innerHTML = `<b>${SHOW_ALL ? v.key + ': ' : (i + 1) + '. '}${v.name}</b>${v.note ? ' · ' + v.note : ''}`;
+    f.appendChild(cap);
+    grid.appendChild(f);
+  });
+  document.body.dataset.ready = '1';
+});
+</script>
+</body>
+</html>

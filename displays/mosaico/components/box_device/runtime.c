@@ -52,7 +52,7 @@ static void log_line(void *ctx, const char *line)
     ESP_LOGI(TAG, "%s", line);
 }
 
-static bool local_time(void *ctx, int *hour, int *minute)
+static bool local_time(void *ctx, int *hour, int *minute, int *second)
 {
     (void)ctx;
     const time_t now = time(NULL);
@@ -63,6 +63,7 @@ static bool local_time(void *ctx, int *hour, int *minute)
     localtime_r(&now, &tm);
     *hour = tm.tm_hour;
     *minute = tm.tm_min;
+    *second = tm.tm_sec;
     return true;
 }
 

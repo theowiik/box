@@ -44,7 +44,7 @@ typedef enum {
 } box_content_t;
 
 /** The local time for a clock. False while it is not known yet. */
-typedef bool (*box_clock_fn)(void *ctx, int *hour, int *minute);
+typedef bool (*box_clock_fn)(void *ctx, int *hour, int *minute, int *second);
 
 typedef struct box_scene box_scene_t;
 

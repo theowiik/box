@@ -44,11 +44,11 @@ func (g *Glance) Poll(ctx context.Context) (*client.Event, error) {
 			g.reading, g.have = r, true
 		}
 	}
-	c := client.Content{Type: "glance", Date: now.Format("Monday 2 January"), Time: now.Format("15:04"), Mood: "good"}
+	c := client.Content{Type: "glance", Date: now.Format("Monday 2 January"), Time: now.Format("15:04"), Mood: "happy"} // the smiley is always happy
 	if g.have {
 		r := g.reading
 		c.Temp = fmt.Sprintf("%d°", int(math.Round(r.Temp)))
-		c.Condition, c.Sky, c.Color, c.Mood = r.Condition, r.Sky, r.Color, Mood(r.Condition)
+		c.Condition, c.Sky, c.Color = r.Condition, r.Sky, r.Color
 	}
 	// The box keeps the time itself (the dots move when the minute turns), so
 	// a new minute is no reason to post: a new event would restart the glance.
@@ -62,17 +62,4 @@ func (g *Glance) Poll(ctx context.Context) (*client.Event, error) {
 		slog.Warn("glance: no weather this time", "err", werr)
 	}
 	return &e, nil
-}
-
-// Mood is how the weather feels, for the glance's smiley.
-func Mood(condition string) string {
-	switch condition {
-	case "Sunny", "Clear":
-		return "happy"
-	case "Mostly clear", "Partly cloudy", "Snow":
-		return "good"
-	case "Rainy", "Drizzle", "Storm":
-		return "sad"
-	}
-	return "meh"
 }

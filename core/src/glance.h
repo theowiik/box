@@ -45,10 +45,11 @@ typedef struct {
 typedef struct box_glance_anim box_glance_anim_t;
 box_glance_anim_t *box_glance_anim_new(void);
 void box_glance_anim_free(box_glance_anim_t *anim);
-/** Points the dots at `time`, and changes exactly when the glance would draw
- *  differently at `t`: every frame while dots fly or the smiley moves. */
+/** Points the dots at `time` (HH:MM) and `second` (0-59, or -1 when unknown:
+ *  no seconds), and changes exactly when the glance would draw differently
+ *  at `t`: every frame while dots fly or the smiley moves. */
 uint64_t box_glance_anim_version(box_glance_anim_t *anim, const uint32_t *time, size_t count,
-                                 double t);
+                                 int second, double t);
 
 void box_glance_draw_smooth(box_frame_t *frame, const box_glance_t *glance,
                             box_glance_anim_t *anim, double t);

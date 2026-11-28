@@ -18,6 +18,7 @@ const char *const BOX_GLANCE_MOODS[] = {"happy", "good", "meh", "sad", NULL};
 
 static const box_rgb_t WHITE = {255, 255, 255};
 static const box_rgb_t MUTED = {150, 158, 170};
+static const box_rgb_t SECONDS = {165, 168, 174}; /* the clock's seconds: a little grey */
 static const box_rgb_t SUN = {255, 200, 60};
 static const box_rgb_t MOON = {225, 230, 245};
 static const box_rgb_t CLOUD = {215, 222, 232};
@@ -216,24 +217,29 @@ static void weather_icon(box_frame_t *f, box_glance_sky_t sky, float cx, float c
     }
 }
 
-/* --- the dot clock: dots on springs ----------------------------------------- */
+/* --- the dot clocks: dots on springs ---------------------------------------- */
 
-/* The time is sampled on a COLS x ROWS grid: every cell it mostly covers is
- * a home for one dot (in grid units, y down). Each dot is pulled home by its
- * own damped spring, a little stiffer or softer than the next, so dots that
- * move don't move as one; once all are home they sit exactly on the grid and
- * nothing is drawn until the time changes again.
+/* A time is laid out on a grid as block digits: every cell a digit covers is
+ * a home for one dot (in grid units, y down). Each dot is pulled home by its own damped
+ * spring, a little stiffer or softer than the next, so dots that move don't
+ * move as one; once all are home they sit exactly on the grid and nothing is
+ * drawn until the time changes again.
  *
  * Dots never appear or disappear. Each group of the time (the hours, each
  * colon, the minutes) owns a fixed set of dots: as many as its widest digits
  * need. When its digits need fewer, the spares rest exactly on top of another
  * dot and aren't drawn. When the time changes only the changed groups move:
  * a dot whose home is still a home keeps it, the others go to the nearest
- * free home, and spares stack on the home nearest them. */
-#define COLS 60           /* grid cells across the clock */
-#define ROWS 18           /* and down it */
-#define SS 4              /* the time is drawn this many pixels per cell, then sampled */
-#define DOTS_MAX 1024
+ * free home, and spares stack on the home nearest them.
+ *
+ * The time is HH:MM:SS, one size; the seconds are a group like the others
+ * (so a new second moves only them), drawn a little grey. */
+#define COLS 84           /* grid cells across the clock */
+#define ROWS 26           /* and down it: the digits are this tall */
+#define DIGIT_W 10        /* a digit's width, in cells */
+#define STROKE 4          /* its strokes' thickness */
+#define GAP 2             /* between characters */
+#define DOTS_MAX 1536
 #define TIME_MAX 8        /* characters */
 #define STEP (1.0f / 120) /* seconds per physics step */
 #define CATCH_UP 0.1f     /* at most this much simulated at once: a slow frame slows time, not the frame after */
@@ -256,27 +262,44 @@ typedef struct {
     uint8_t slot;   /* which character it belongs to */
 } home_t;
 
-struct box_glance_anim {
+/* Where a clock's grid sits on the frame: its top-left and its cell size. */
+typedef struct {
+    float left, top, pitch;
+} place_t;
+
+typedef struct {
+    int cols, rows;
+    float base, cap;          /* the digits' baseline, in cells from the top, and height */
+    uint8_t grey;             /* the group drawn grey: the seconds (none: 255) */
     uint32_t shown[TIME_MAX];
     size_t shown_count;
     bool any;
     uint32_t shape[TIME_MAX]; /* the layout: '0' for every digit, else the character */
     uint8_t group_of[TIME_MAX];
-    double now;          /* scene time simulated up to */
-    uint32_t seed;
     dot_t dots[DOTS_MAX];
     size_t count;
-    uint64_t changes;
     bool moving;
-    /* The smiley: where it looks, and when it next blinks. */
-    float look, look_v;
-    double blink_at;
-    box_frame_t still; /* what never moves, drawn once */
     /* What the frame shows now, to redraw only what moved. */
     float drawn_x[DOTS_MAX], drawn_y[DOTS_MAX];
     bool drawn_on[DOTS_MAX];
     size_t drawn_count;
-    float drawn_blink, drawn_look;
+} dotclock_t;
+
+enum { BIG, CLOCKS };
+
+struct box_glance_anim {
+    dotclock_t clock[CLOCKS];
+    double now;          /* scene time simulated up to */
+    uint32_t seed;
+    uint64_t changes;
+    /* The smiley: where it looks (across and up or down), where it wants to
+     * look next and when, and when it next blinks. */
+    float look, look_v, look_y, look_y_v;
+    float gaze_x, gaze_y;
+    double gaze_at, blink_at;
+    box_frame_t still; /* what never moves, drawn once */
+    float drawn_blink, drawn_look, drawn_look_y;
+    place_t drawn_at; /* where the big clock was drawn: if it moves, draw it all */
     bool drawn;
 };
 
@@ -300,6 +323,9 @@ box_glance_anim_t *box_glance_anim_new(void)
     box_glance_anim_t *a = calloc(1, sizeof(*a));
     if (a) {
         a->blink_at = 2.5;
+        a->gaze_at = 1.5;
+        a->clock[BIG].cols = COLS;
+        a->clock[BIG].rows = ROWS;
     }
     return a;
 }
@@ -317,67 +343,75 @@ static bool is_digit(uint32_t c)
     return c >= '0' && c <= '9';
 }
 
-/* The homes of the time: drawn in Inter, bold, and every cell of the grid
- * that it mostly covers, with the character each belongs to. */
-static size_t homes_of(const uint32_t *cps, size_t n, home_t *out)
+/* Seven segments: a top, b top right, c bottom right, d bottom, e bottom
+ * left, f top left, g middle. A 1 is a bar down the middle instead (on the
+ * right it leaves a hole beside it), a - is the middle segment. */
+static const char *segments_of(uint32_t ch)
 {
-    box_frame_t mask;
-    if (!n || !box_frame_init(&mask, COLS * SS, ROWS * SS)) {
-        return 0;
-    }
-    const float W = (float)mask.width, H = (float)mask.height;
-    /* Each character keeps a fixed slot (every digit as wide as the widest),
-     * so a changed digit never shifts the others. Digits stand about 0.73 of
-     * the font size: fill the height, fit the width. */
-    static const uint32_t digits[] = {'0', '1', '2', '3', '4', '5', '6', '7', '8', '9'};
-    int digit100 = 0;
-    for (int d = 0; d < 10; ++d) {
-        const int dw = box_font_width(BOX_FONT_BOLD, 100, &digits[d], 1);
-        digit100 = dw > digit100 ? dw : digit100;
-    }
-    float slots100 = 0;
+    static const char *const digits[10] = {"abcdef", "", "abged", "abgcd", "fgbc",
+                                           "afgcd", "afgedc", "abc", "abcdefg", "abcdfg"};
+    return ch >= '0' && ch <= '9' ? digits[ch - '0'] : ch == '-' ? "g" : "";
+}
+
+/* The homes of a time on clock `c`'s grid: block digits built on the grid
+ * itself, DIGIT_W x ROWS cells with strokes STROKE cells thick and square
+ * corners, GAP cells apart, the line centred. Each home knows its character. */
+static size_t homes_of(dotclock_t *c, const uint32_t *cps, size_t n, home_t *out)
+{
+    static uint8_t lit[ROWS][COLS]; /* the character + 1 lighting each cell */
+    memset(lit, 0, sizeof(lit));
+    const int H = c->rows, T = STROKE, mid = (H - T) / 2;
+    int line = 0;
     for (size_t i = 0; i < n; ++i) {
-        slots100 += is_digit(cps[i]) ? digit100 : box_font_width(BOX_FONT_BOLD, 100, &cps[i], 1);
+        line += (cps[i] == ':' ? T : DIGIT_W) + (i ? GAP : 0);
     }
-    float size = H / 0.73f;
-    if (slots100 > 0 && slots100 * size / 100 > W) {
-        size = W * 100 / slots100;
-    }
-    float pen = (W - slots100 * size / 100) / 2, ends[TIME_MAX];
+    c->base = c->cap = (float)H;
+    int x0 = (c->cols - line) / 2;
     for (size_t i = 0; i < n; ++i) {
-        const float slot = (is_digit(cps[i]) ? digit100 : box_font_width(BOX_FONT_BOLD, 100, &cps[i], 1)) * size / 100;
-        const int cw = box_font_width(BOX_FONT_BOLD, size, &cps[i], 1);
-        box_font_draw(&mask, BOX_FONT_BOLD, size, &cps[i], 1, (int)lroundf(pen + (slot - cw) / 2),
-                      (int)((H + 0.73f * size) / 2), (box_rgb_t){255, 255, 255});
-        pen += slot;
-        ends[i] = pen;
+        const uint8_t mark = (uint8_t)(i + 1);
+#define RECT(gx, gy, w, h)                                                                   \
+        for (int y = (gy); y < (gy) + (h); ++y)                                              \
+            for (int x = x0 + (gx); x < x0 + (gx) + (w); ++x)                                \
+                if (x >= 0 && x < c->cols && y >= 0 && y < H) lit[y][x] = mark;
+        if (cps[i] == ':') {
+            RECT(0, (int)lroundf(H * 0.3f) - T / 2, T, T);
+            RECT(0, (int)lroundf(H * 0.7f) - T / 2, T, T);
+            x0 += T + GAP;
+            continue;
+        }
+        if (cps[i] == '1') {
+            RECT((DIGIT_W - T) / 2, 0, T, H);
+        }
+        for (const char *s = segments_of(cps[i]); *s; ++s) {
+            switch (*s) {
+            case 'a': RECT(0, 0, DIGIT_W, T); break;
+            case 'g': RECT(0, mid, DIGIT_W, T); break;
+            case 'd': RECT(0, H - T, DIGIT_W, T); break;
+            case 'f': RECT(0, 0, T, mid + T); break;
+            case 'b': RECT(DIGIT_W - T, 0, T, mid + T); break;
+            case 'e': RECT(0, mid, T, H - mid); break;
+            case 'c': RECT(DIGIT_W - T, mid, T, H - mid); break;
+            default: break;
+            }
+        }
+#undef RECT
+        x0 += DIGIT_W + GAP;
     }
     size_t count = 0;
-    for (int y = 0; y < ROWS; ++y) {
-        for (int x = 0; x < COLS && count < DOTS_MAX; ++x) {
-            unsigned sum = 0;
-            for (int dy = 0; dy < SS; ++dy) {
-                for (int dx = 0; dx < SS; ++dx) {
-                    sum += mask.pixels[((size_t)(y * SS + dy) * mask.width + x * SS + dx) * 3];
-                }
-            }
-            if (sum > 255u * SS * SS / 2) {
-                size_t slot = 0;
-                while (slot + 1 < n && (x + 0.5f) * SS >= ends[slot]) {
-                    ++slot;
-                }
-                out[count++] = (home_t){(int8_t)x, (int8_t)y, (uint8_t)slot};
+    for (int y = 0; y < H; ++y) {
+        for (int x = 0; x < c->cols && count < DOTS_MAX; ++x) {
+            if (lit[y][x]) {
+                out[count++] = (home_t){(int8_t)x, (int8_t)y, (uint8_t)(lit[y][x] - 1)};
             }
         }
     }
-    box_frame_free(&mask);
     return count;
 }
 
 /* A new layout (the first time, or a time of another shape): sort the
  * characters into groups and give each group its dots, enough for its
- * widest digits. The dots start at home. */
-static void lay_out(box_glance_anim_t *a, const uint32_t *cps, size_t n)
+ * widest digits. */
+static void lay_out(box_glance_anim_t *a, dotclock_t *c, const uint32_t *cps, size_t n)
 {
     static home_t homes[DOTS_MAX];
     size_t most[TIME_MAX] = {0};
@@ -387,7 +421,7 @@ static void lay_out(box_glance_anim_t *a, const uint32_t *cps, size_t n)
             probe[i] = is_digit(cps[i]) ? d : cps[i];
         }
         size_t per[TIME_MAX] = {0};
-        const size_t nh = homes_of(probe, n, homes);
+        const size_t nh = homes_of(c, probe, n, homes);
         for (size_t j = 0; j < nh; ++j) {
             ++per[homes[j].slot];
         }
@@ -397,18 +431,19 @@ static void lay_out(box_glance_anim_t *a, const uint32_t *cps, size_t n)
     }
     uint8_t group = 0;
     for (size_t i = 0; i < n; ++i) {
-        a->shape[i] = is_digit(cps[i]) ? '0' : cps[i];
+        c->shape[i] = is_digit(cps[i]) ? '0' : cps[i];
         if (i > 0 && !(is_digit(cps[i]) && is_digit(cps[i - 1]))) {
             ++group;
         }
-        a->group_of[i] = group;
+        c->group_of[i] = group;
     }
-    a->count = 0;
+    c->grey = n == 8 ? c->group_of[7] : 255; /* HH:MM:SS */
+    c->count = 0;
     for (size_t i = 0; i < n; ++i) {
-        for (size_t k = 0; k < most[i] && a->count < DOTS_MAX; ++k) {
-            dot_t *d = &a->dots[a->count++];
+        for (size_t k = 0; k < most[i] && c->count < DOTS_MAX; ++k) {
+            dot_t *d = &c->dots[c->count++];
             *d = (dot_t){0};
-            d->group = a->group_of[i];
+            d->group = c->group_of[i];
             d->k = SPRING * (0.75f + 0.5f * rnd(a)); /* no two quite alike */
             d->hx = d->hy = -1;
         }
@@ -427,8 +462,8 @@ static void send_home(box_glance_anim_t *a, dot_t *d, float hx, float hy, bool s
 }
 
 /* Match a group's dots to its new homes. */
-static void settle_group(box_glance_anim_t *a, uint8_t group, const home_t *homes, size_t nh,
-                         bool kick)
+static void settle_group(box_glance_anim_t *a, dotclock_t *c, uint8_t group, const home_t *homes,
+                         size_t nh, bool kick)
 {
     static bool taken[DOTS_MAX];
     static uint16_t loose[DOTS_MAX], open[DOTS_MAX];
@@ -437,8 +472,8 @@ static void settle_group(box_glance_anim_t *a, uint8_t group, const home_t *home
     /* Dots on a home that is still a home keep it: dots that show first,
      * then spares, so a spare never takes a home from the dot under it. */
     for (int pass = 0; pass < 2; ++pass) {
-        for (size_t i = 0; i < a->count; ++i) {
-            dot_t *d = &a->dots[i];
+        for (size_t i = 0; i < c->count; ++i) {
+            dot_t *d = &c->dots[i];
             if (d->group != group || d->spare != (pass == 1)) {
                 continue;
             }
@@ -471,19 +506,19 @@ static void settle_group(box_glance_anim_t *a, uint8_t group, const home_t *home
         size_t best = 0;
         float best_d = 1e9f;
         for (size_t l = 0; l < nl; ++l) {
-            const dot_t *d = &a->dots[loose[l]];
+            const dot_t *d = &c->dots[loose[l]];
             const float e = (d->x - h->x) * (d->x - h->x) + (d->y - h->y) * (d->y - h->y);
             if (e < best_d) {
                 best_d = e;
                 best = l;
             }
         }
-        send_home(a, &a->dots[loose[best]], h->x, h->y, false, kick);
+        send_home(a, &c->dots[loose[best]], h->x, h->y, false, kick);
         loose[best] = loose[--nl];
     }
     /* Spares rest on the home nearest them. */
     for (size_t l = 0; l < nl && nh; ++l) {
-        dot_t *d = &a->dots[loose[l]];
+        dot_t *d = &c->dots[loose[l]];
         size_t best = 0;
         float best_d = 1e9f;
         for (size_t j = 0; j < nh; ++j) {
@@ -498,72 +533,75 @@ static void settle_group(box_glance_anim_t *a, uint8_t group, const home_t *home
     }
 }
 
-static void set_time(box_glance_anim_t *a, const uint32_t *cps, size_t n)
+static void set_time(box_glance_anim_t *a, dotclock_t *c, const uint32_t *cps, size_t n)
 {
     static home_t homes[DOTS_MAX], mine[DOTS_MAX];
-    bool fresh = !a->any || n != a->shown_count;
+    bool fresh = !c->any || n != c->shown_count;
     for (size_t i = 0; i < n && !fresh; ++i) {
-        fresh = a->shape[i] != (is_digit(cps[i]) ? '0' : cps[i]);
+        fresh = c->shape[i] != (is_digit(cps[i]) ? '0' : cps[i]);
     }
     if (fresh) {
-        lay_out(a, cps, n);
+        lay_out(a, c, cps, n);
     }
-    const size_t nh = homes_of(cps, n, homes);
-    for (uint8_t g = 0; g <= a->group_of[n ? n - 1 : 0]; ++g) {
+    const size_t nh = homes_of(c, cps, n, homes);
+    for (uint8_t g = 0; n && g <= c->group_of[n - 1]; ++g) {
         bool same = !fresh;
         for (size_t i = 0; i < n && same; ++i) {
-            same = a->group_of[i] != g || a->shown[i] == cps[i];
+            same = c->group_of[i] != g || c->shown[i] == cps[i];
         }
         if (same) {
             continue; /* this group shows what it showed: it stays still */
         }
         size_t nm = 0;
         for (size_t j = 0; j < nh; ++j) {
-            if (a->group_of[homes[j].slot] == g) {
+            if (c->group_of[homes[j].slot] == g) {
                 mine[nm++] = homes[j];
             }
         }
-        settle_group(a, g, mine, nm, !fresh);
-        a->moving = true;
+        settle_group(a, c, g, mine, nm, !fresh);
+        c->moving = true;
     }
     if (fresh) { /* the first time: everything already home */
-        for (size_t i = 0; i < a->count; ++i) {
-            a->dots[i].x = a->dots[i].hx;
-            a->dots[i].y = a->dots[i].hy;
+        for (size_t i = 0; i < c->count; ++i) {
+            c->dots[i].x = c->dots[i].hx;
+            c->dots[i].y = c->dots[i].hy;
         }
-        a->moving = false;
+        c->moving = false;
     }
-    memcpy(a->shown, cps, n * sizeof(uint32_t));
-    a->shown_count = n;
-    a->any = true;
+    if (!n) {
+        c->count = 0;
+    }
+    memcpy(c->shown, cps, n * sizeof(uint32_t));
+    c->shown_count = n;
+    c->any = true;
     ++a->changes;
 }
 
-static void step(box_glance_anim_t *a)
+static void step(dotclock_t *c)
 {
-    if (!a->moving) {
+    if (!c->moving) {
         return;
     }
     const float dt = STEP;
     bool busy = false;
-    for (size_t i = 0; i < a->count; ++i) {
-        dot_t *d = &a->dots[i];
-        const float c = 2 * DAMPING * sqrtf(d->k); /* damped spring, unit mass */
-        d->vx += (d->k * (d->hx - d->x) - c * d->vx) * dt;
-        d->vy += (d->k * (d->hy - d->y) - c * d->vy) * dt;
+    for (size_t i = 0; i < c->count; ++i) {
+        dot_t *d = &c->dots[i];
+        const float k = d->k, damp = 2 * DAMPING * sqrtf(k); /* damped spring, unit mass */
+        d->vx += (k * (d->hx - d->x) - damp * d->vx) * dt;
+        d->vy += (k * (d->hy - d->y) - damp * d->vy) * dt;
         d->x += d->vx * dt;
         d->y += d->vy * dt;
         busy |= fabsf(d->x - d->hx) + fabsf(d->y - d->hy) > HOME ||
                 fabsf(d->vx) + fabsf(d->vy) > 0.1f;
     }
     if (!busy) { /* all home: exactly on the grid, and still */
-        for (size_t i = 0; i < a->count; ++i) {
-            dot_t *d = &a->dots[i];
+        for (size_t i = 0; i < c->count; ++i) {
+            dot_t *d = &c->dots[i];
             d->x = d->hx;
             d->y = d->hy;
             d->vx = d->vy = 0;
         }
-        a->moving = false;
+        c->moving = false;
     }
 }
 
@@ -573,7 +611,12 @@ static bool shows(const dot_t *d)
     return !d->spare || fabsf(d->x - d->hx) + fabsf(d->y - d->hy) > 0.3f;
 }
 
-/* --- the smiley: it watches the dots, and blinks when it likes -------------- */
+static box_rgb_t colour_of(const dotclock_t *c, const dot_t *d)
+{
+    return d->group == c->grey ? SECONDS : WHITE;
+}
+
+/* --- the smiley: it looks around, watches the dots, blinks when it likes --- */
 
 #define BLINK 0.18f
 
@@ -582,25 +625,44 @@ typedef struct {
     float look;  /* -1 left .. 1 right */
     float hop;   /* 0 resting .. 1 high */
     bool moving;
+    float look_y; /* -1 up .. 1 down */
 } face_t;
+
+/* A damped spring towards `goal`, coming exactly to rest on it. */
+static void ease(float *v, float *vel, float goal)
+{
+    *vel += (120 * (goal - *v) - 17 * *vel) * STEP;
+    *v += *vel * STEP;
+    if (fabsf(goal - *v) < 0.002f && fabsf(*vel) < 0.01f) {
+        *v = goal;
+        *vel = 0;
+    }
+}
 
 static void step_face(box_glance_anim_t *a, double t)
 {
-    /* Look at the dots on their way while any fly; else back to the middle. */
+    /* Look up at the big clock's dots on their way while any fly. (The
+     * seconds fly every second: it would never look anywhere else.) Else it
+     * looks around: every few seconds somewhere new, now and then straight
+     * ahead. */
+    const dotclock_t *c = &a->clock[BIG];
     float sum = 0, n = 0;
-    for (size_t i = 0; i < a->count; ++i) {
-        const dot_t *d = &a->dots[i];
-        if (fabsf(d->x - d->hx) + fabsf(d->y - d->hy) > 0.5f) {
+    for (size_t i = 0; i < c->count && c->moving; ++i) {
+        const dot_t *d = &c->dots[i];
+        if (d->group != c->grey && fabsf(d->x - d->hx) + fabsf(d->y - d->hy) > 0.5f) {
             sum += d->x;
             ++n;
         }
     }
-    const float goal = n ? fmaxf(-1, fminf(1, (sum / n / COLS) * 2 - 1)) : 0;
-    a->look_v += (60 * (goal - a->look) - 12 * a->look_v) * STEP;
-    a->look += a->look_v * STEP;
-    if (fabsf(a->look) < 0.001f && fabsf(a->look_v) < 0.001f) {
-        a->look = a->look_v = 0; /* at rest: exactly still */
+    if (!n && t >= a->gaze_at) {
+        const bool ahead = rnd(a) < 0.25f;
+        a->gaze_x = ahead ? 0 : rnd(a) * 2 - 1;
+        a->gaze_y = ahead ? 0 : rnd(a) * 1.4f - 0.9f; /* more often up than down */
+        a->gaze_at = t + 1.2 + 3.5 * rnd(a);
     }
+    const float goal = n ? fmaxf(-1, fminf(1, (sum / n / COLS) * 2 - 1)) : a->gaze_x;
+    ease(&a->look, &a->look_v, goal);
+    ease(&a->look_y, &a->look_y_v, n ? -0.8f : a->gaze_y);
     if (t > a->blink_at + BLINK) { /* the next blink: some time soon */
         a->blink_at = t + 2 + 5 * rnd(a);
     }
@@ -608,17 +670,18 @@ static void step_face(box_glance_anim_t *a, double t)
 
 static face_t face_of(const box_glance_anim_t *a, double t)
 {
-    face_t f = {1, a->look, 0, false};
+    face_t f = {1, a->look, 0, false, a->look_y};
     const float b = (float)(t - a->blink_at);
     if (b >= 0 && b < BLINK) {
         f.blink = fabsf(1 - 2 * b / BLINK);
         f.moving = true;
     }
-    f.moving |= fabsf(a->look_v) > 0.01f || fabsf(a->look) > 0.01f;
+    f.moving |= a->look_v != 0 || a->look_y_v != 0;
     return f;
 }
 
-uint64_t box_glance_anim_version(box_glance_anim_t *a, const uint32_t *time, size_t n, double t)
+uint64_t box_glance_anim_version(box_glance_anim_t *a, const uint32_t *time, size_t n,
+                                 int second, double t)
 {
     if (n > TIME_MAX) {
         n = TIME_MAX;
@@ -627,19 +690,29 @@ uint64_t box_glance_anim_version(box_glance_anim_t *a, const uint32_t *time, siz
         const double back = a->now - t;
         a->now -= back;
         a->blink_at -= back;
+        a->gaze_at -= back;
     }
-    if (!a->any || n != a->shown_count || memcmp(time, a->shown, n * sizeof(uint32_t))) {
-        set_time(a, time, n);
+    /* HH:MM, and :SS after it when the seconds are known. */
+    uint32_t full[TIME_MAX];
+    memcpy(full, time, n * sizeof(uint32_t));
+    if (n == 5 && second >= 0 && second < 60) {
+        full[n++] = ':';
+        full[n++] = (uint32_t)('0' + second / 10);
+        full[n++] = (uint32_t)('0' + second % 10);
+    }
+    dotclock_t *big = &a->clock[BIG];
+    if (!big->any || n != big->shown_count || memcmp(full, big->shown, n * sizeof(uint32_t))) {
+        set_time(a, big, full, n);
     }
     if (t - a->now > CATCH_UP) { /* away a long time: pick up from now */
         a->now = t - CATCH_UP;
     }
     while (a->now + STEP <= t) {
         a->now += STEP;
-        step(a);
+        step(big);
         step_face(a, a->now);
     }
-    const bool moving = a->moving || face_of(a, t).moving;
+    const bool moving = big->moving || face_of(a, t).moving;
     /* A frame number while anything moves; otherwise still. */
     return (a->changes << 32) + (moving ? (uint64_t)(t * 30) + 1 : 0);
 }
@@ -649,7 +722,8 @@ static void smiley(box_frame_t *f, box_glance_mood_t mood, float cx, float cy, f
     cy -= m.hop * r * 0.35f;
     disc(f, cx, cy, r, FACE);
     const float pi = (float)M_PI, w = r * 0.13f;
-    const float ex = r * 0.33f, ey = cy - r * 0.2f, er = r * 0.12f, shift = m.look * r * 0.14f;
+    const float ex = r * 0.33f, ey = cy - r * 0.2f + m.look_y * r * 0.12f, er = r * 0.12f;
+    const float shift = m.look * r * 0.14f, my = m.look_y * r * 0.05f;
     for (int side = -1; side <= 1; side += 2) {
         const float x = cx + side * ex + shift;
         if (m.blink > 0.35f) {
@@ -663,17 +737,17 @@ static void smiley(box_frame_t *f, box_glance_mood_t mood, float cx, float cy, f
     const float mx = cx + shift * 0.5f;
     switch (mood) {
     case BOX_MOOD_HAPPY:
-        arc(f, mx, cy + r * 0.02f, r * 0.5f, pi * 0.15f, pi * 0.85f, w, FEATURES);
+        arc(f, mx, cy + my + r * 0.02f, r * 0.5f, pi * 0.15f, pi * 0.85f, w, FEATURES);
         break;
     case BOX_MOOD_GOOD:
-        arc(f, mx, cy - r * 0.1f, r * 0.5f, pi * 0.3f, pi * 0.7f, w, FEATURES);
+        arc(f, mx, cy + my - r * 0.1f, r * 0.5f, pi * 0.3f, pi * 0.7f, w, FEATURES);
         break;
     case BOX_MOOD_MEH:
-        stroke(f, mx - r * 0.3f, cy + r * 0.38f, mx + r * 0.3f, cy + r * 0.38f, w, FEATURES);
+        stroke(f, mx - r * 0.3f, cy + my + r * 0.38f, mx + r * 0.3f, cy + my + r * 0.38f, w, FEATURES);
         break;
     case BOX_MOOD_SAD:
     default:
-        arc(f, mx, cy + r * 0.75f, r * 0.42f, pi * 1.25f, pi * 1.75f, w, FEATURES);
+        arc(f, mx, cy + my + r * 0.75f, r * 0.42f, pi * 1.25f, pi * 1.75f, w, FEATURES);
         break;
     }
 }
@@ -686,24 +760,23 @@ static float fit_size(box_font_face_t face, float size, const uint32_t *cps, siz
     return w > 0 ? fminf(size, max_w * 100 / w) : size;
 }
 
-/* Draw the dots with the clock's top-left at (x, y), `pitch` apart. Smooth
- * draws round dots; led lights the nearest block. */
-static void draw_dots(box_frame_t *f, const box_glance_anim_t *a, float x, float y, float pitch,
-                      bool round)
+/* Draw a clock's dots. Smooth draws round dots; led lights the nearest block. */
+static void draw_dots(box_frame_t *f, const dotclock_t *c, place_t p, bool round)
 {
-    for (size_t i = 0; i < a->count; ++i) {
-        const dot_t *b = &a->dots[i];
+    for (size_t i = 0; i < c->count; ++i) {
+        const dot_t *b = &c->dots[i];
         if (!shows(b)) {
             continue;
         }
-        const box_rgb_t c = WHITE;
         if (round) {
-            disc(f, x + (b->x + 0.5f) * pitch, y + (b->y + 0.5f) * pitch, pitch * RADIUS, c);
+            disc(f, p.left + (b->x + 0.5f) * p.pitch, p.top + (b->y + 0.5f) * p.pitch,
+                 p.pitch * RADIUS, colour_of(c, b));
         } else {
-            const int px = (int)lroundf(x + b->x * pitch), py = (int)lroundf(y + b->y * pitch);
-            for (int dy = 0; dy < (int)pitch; ++dy) {
-                for (int dx = 0; dx < (int)pitch; ++dx) {
-                    box_frame_set_px(f, px + dx, py + dy, c);
+            const int px = (int)lroundf(p.left + b->x * p.pitch);
+            const int py = (int)lroundf(p.top + b->y * p.pitch);
+            for (int dy = 0; dy < (int)p.pitch; ++dy) {
+                for (int dx = 0; dx < (int)p.pitch; ++dx) {
+                    box_frame_set_px(f, px + dx, py + dy, colour_of(c, b));
                 }
             }
         }
@@ -734,28 +807,33 @@ static void draw_still(box_frame_t *f, const box_glance_t *g)
                   (int)(cy + 12 * u), MUTED);
 }
 
-/* Where the moving parts go on a frame of this size. */
+/* Where the moving parts go on a frame of this size: the time across the
+ * top (HH:MM, then the seconds on the same baseline), the smiley bottom
+ * right. */
 typedef struct {
-    float left, top, pitch, face_x, face_y, face_r;
+    place_t clock[CLOCKS];
+    float face_x, face_y, face_r;
 } geometry_t;
 
-static geometry_t geometry(const box_frame_t *f)
+static geometry_t geometry(const box_frame_t *f, const box_glance_anim_t *a)
 {
     const float S = (float)(f->width < f->height ? f->width : f->height), u = S / 100;
     const float ox = (f->width - S) / 2, oy = (f->height - S) / 2;
-    return (geometry_t){ox + 8 * u, oy + 22 * u, 84 * u / COLS, ox + 81 * u, oy + 76 * u,
-                        10.5f * u};
+    const dotclock_t *big = &a->clock[BIG];
+    geometry_t g;
+    /* One line 84 wide, the digits centred where they always stood. */
+    const float p = 84 * u / COLS;
+    g.clock[BIG] = (place_t){ox + 8 * u, oy + 39.5f * u + big->cap * p / 2 - big->base * p, p};
+    g.face_x = ox + 81 * u;
+    g.face_y = oy + 76 * u;
+    g.face_r = 10.5f * u;
+    return g;
 }
 
-static float ball_px(const geometry_t *g, float v, float origin)
+static box_rect_t ball_rect(place_t p, float x, float y)
 {
-    return origin + (v + 0.5f) * g->pitch;
-}
-
-static box_rect_t ball_rect(const geometry_t *g, float x, float y)
-{
-    const float cx = ball_px(g, x, g->left), cy = ball_px(g, y, g->top);
-    const float r = g->pitch * RADIUS + 1.5f;
+    const float cx = p.left + (x + 0.5f) * p.pitch, cy = p.top + (y + 0.5f) * p.pitch;
+    const float r = p.pitch * RADIUS + 1.5f;
     return (box_rect_t){(int)floorf(cx - r), (int)floorf(cy - r), (int)ceilf(cx + r),
                         (int)ceilf(cy + r)};
 }
@@ -789,26 +867,31 @@ static bool meets(box_rect_t a, box_rect_t b)
 static void draw_moving(box_frame_t *f, const box_glance_t *g, box_glance_anim_t *a, double t,
                         const geometry_t *geo)
 {
-    for (size_t i = 0; i < a->count; ++i) {
-        const dot_t *b = &a->dots[i];
-        if (i >= a->drawn_count || inside(ball_rect(geo, b->x, b->y), s_clip)) {
-            /* Only a dot drawn here shows where it is now. */
-            a->drawn_x[i] = b->x;
-            a->drawn_y[i] = b->y;
-            a->drawn_on[i] = shows(b);
+    for (int k = 0; k < CLOCKS; ++k) {
+        dotclock_t *c = &a->clock[k];
+        const place_t p = geo->clock[k];
+        for (size_t i = 0; i < c->count; ++i) {
+            const dot_t *b = &c->dots[i];
+            if (i >= c->drawn_count || inside(ball_rect(p, b->x, b->y), s_clip)) {
+                /* Only a dot drawn here shows where it is now. */
+                c->drawn_x[i] = b->x;
+                c->drawn_y[i] = b->y;
+                c->drawn_on[i] = shows(b);
+            }
+            if (shows(b) && meets(ball_rect(p, b->x, b->y), s_clip)) {
+                disc(f, p.left + (b->x + 0.5f) * p.pitch, p.top + (b->y + 0.5f) * p.pitch,
+                     p.pitch * RADIUS, colour_of(c, b));
+            }
         }
-        if (shows(b) && meets(ball_rect(geo, b->x, b->y), s_clip)) {
-            disc(f, ball_px(geo, b->x, geo->left), ball_px(geo, b->y, geo->top),
-                 geo->pitch * RADIUS, WHITE);
-        }
+        c->drawn_count = c->count;
     }
-    a->drawn_count = a->count;
     const face_t face = face_of(a, t);
     if (meets(face_rect(geo), s_clip)) {
         smiley(f, g->mood, geo->face_x, geo->face_y, geo->face_r, face);
         if (inside(face_rect(geo), s_clip)) {
             a->drawn_blink = face.blink;
             a->drawn_look = face.look;
+            a->drawn_look_y = face.look_y;
         }
     }
     a->drawn = true;
@@ -827,10 +910,24 @@ void box_glance_draw_smooth(box_frame_t *f, const box_glance_t *g, box_glance_an
     } else {
         draw_still(f, g);
     }
-    const geometry_t geo = geometry(f);
+    const geometry_t geo = geometry(f, a);
     s_clip = NO_CLIP;
     draw_moving(f, g, a, t, &geo);
+    a->drawn_at = geo.clock[BIG];
     box_frame_changed_all(f);
+}
+
+/* The rectangles a dot covered (where it was drawn) and covers (where it is). */
+static int dot_rects(const dotclock_t *c, place_t p, size_t i, box_rect_t r[2])
+{
+    int k = 0;
+    if (i < c->drawn_count) {
+        r[k++] = ball_rect(p, c->drawn_x[i], c->drawn_y[i]);
+    }
+    if (i < c->count) {
+        r[k++] = ball_rect(p, c->dots[i].x, c->dots[i].y);
+    }
+    return k;
 }
 
 void box_glance_draw_smooth_again(box_frame_t *f, const box_glance_t *g, box_glance_anim_t *a,
@@ -842,45 +939,47 @@ void box_glance_draw_smooth_again(box_frame_t *f, const box_glance_t *g, box_gla
         return;
     }
     /* What moved: dots where they were and where they are, and the face. */
-    const geometry_t geo = geometry(f);
+    const geometry_t geo = geometry(f, a);
+    if (memcmp(&geo.clock[BIG], &a->drawn_at, sizeof(place_t))) {
+        box_glance_draw_smooth(f, g, a, t); /* the line was laid out anew */
+        return;
+    }
     box_rect_t u = {f->width, f->height, -1, -1};
-    const size_t n = a->count > a->drawn_count ? a->count : a->drawn_count;
-    for (size_t i = 0; i < n; ++i) {
-        const bool was = i < a->drawn_count, is = i < a->count;
-        const dot_t *b = is ? &a->dots[i] : NULL;
-        if (was && is && fabsf(b->x - a->drawn_x[i]) * geo.pitch < 0.02f &&
-            fabsf(b->y - a->drawn_y[i]) * geo.pitch < 0.02f &&
-            shows(b) == a->drawn_on[i]) {
-            continue;
-        }
-        if (was) {
-            grow(&u, ball_rect(&geo, a->drawn_x[i], a->drawn_y[i]));
-        }
-        if (is) {
-            grow(&u, ball_rect(&geo, b->x, b->y));
+    for (int k = 0; k < CLOCKS; ++k) {
+        const dotclock_t *c = &a->clock[k];
+        const place_t p = geo.clock[k];
+        const size_t n = c->count > c->drawn_count ? c->count : c->drawn_count;
+        for (size_t i = 0; i < n; ++i) {
+            const dot_t *b = i < c->count ? &c->dots[i] : NULL;
+            if (b && i < c->drawn_count && fabsf(b->x - c->drawn_x[i]) * p.pitch < 0.02f &&
+                fabsf(b->y - c->drawn_y[i]) * p.pitch < 0.02f && shows(b) == c->drawn_on[i]) {
+                continue;
+            }
+            box_rect_t r[2];
+            for (int j = dot_rects(c, p, i, r); j-- > 0;) {
+                grow(&u, r[j]);
+            }
         }
     }
     const face_t face = face_of(a, t);
-    if (fabsf(face.blink - a->drawn_blink) > 0.001f || fabsf(face.look - a->drawn_look) > 0.001f) {
+    if (fabsf(face.blink - a->drawn_blink) > 0.001f || fabsf(face.look - a->drawn_look) > 0.001f ||
+        fabsf(face.look_y - a->drawn_look_y) > 0.001f) {
         grow(&u, face_rect(&geo));
     }
     /* Whatever the area touches is redrawn whole: grow it until nothing
      * sticks out half drawn. */
     for (bool grew = u.x2 >= u.x1; grew;) {
         grew = false;
-        for (size_t i = 0; i < n; ++i) {
-            box_rect_t r[2];
-            int k = 0;
-            if (i < a->drawn_count) {
-                r[k++] = ball_rect(&geo, a->drawn_x[i], a->drawn_y[i]);
-            }
-            if (i < a->count) {
-                r[k++] = ball_rect(&geo, a->dots[i].x, a->dots[i].y);
-            }
-            for (int j = 0; j < k; ++j) {
-                if (meets(r[j], u) && !inside(r[j], u)) {
-                    grow(&u, r[j]);
-                    grew = true;
+        for (int k = 0; k < CLOCKS; ++k) {
+            const dotclock_t *c = &a->clock[k];
+            const size_t n = c->count > c->drawn_count ? c->count : c->drawn_count;
+            for (size_t i = 0; i < n; ++i) {
+                box_rect_t r[2];
+                for (int j = dot_rects(c, geo.clock[k], i, r); j-- > 0;) {
+                    if (meets(r[j], u) && !inside(r[j], u)) {
+                        grow(&u, r[j]);
+                        grew = true;
+                    }
                 }
             }
         }
@@ -918,8 +1017,8 @@ void box_glance_draw_led(box_frame_t *f, const box_glance_t *g, const box_glance
     const int ox = (f->width - G) / 2, oy = (f->height - G) / 2;
     int sc = (G - 2 * BOX_TEXT_MARGIN) / COLS;
     sc = sc < 1 ? 1 : sc > 3 ? 3 : sc;
-    draw_dots(f, a, (float)(ox + (G - COLS * sc) / 2), (float)(oy + G * 14 / 100),
-              (float)sc, false);
+    draw_dots(f, &a->clock[BIG],
+              (place_t){(float)(ox + (G - COLS * sc) / 2), (float)(oy + G * 14 / 100), (float)sc}, false);
 
     /* The temperature without the degree sign, which the bitmap font lacks;
      * a small block stands in for it. */

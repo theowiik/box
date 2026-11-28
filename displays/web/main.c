@@ -69,13 +69,14 @@ static double now_s(void)
     return (double)ts.tv_sec + (double)ts.tv_nsec / 1e9;
 }
 
-static bool local_time(void *ctx, int *hour, int *minute)
+static bool local_time(void *ctx, int *hour, int *minute, int *second)
 {
     const time_t now = time(NULL);
     struct tm tm;
     localtime_r(&now, &tm);
     *hour = tm.tm_hour;
     *minute = tm.tm_min;
+    *second = tm.tm_sec;
     return true;
 }
 
